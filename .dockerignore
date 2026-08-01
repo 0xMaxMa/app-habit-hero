@@ -1,0 +1,9 @@
+node_modules
+.next
+.env*
+.git
+postgres
+coverage
+test-results
+playwright-report
+tests

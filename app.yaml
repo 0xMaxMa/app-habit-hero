@@ -1,0 +1,61 @@
+apiVersion: v1
+name: habit-hero
+version: 0.1.0
+description: Kids habit & chore tracker with an AI agent (channel-agnostic)
+author: Mona-lisa-jai-kere
+
+services:
+  app:
+    build: .
+    resources:
+      cpu: 0.5
+      memory: 256M
+    ports:
+      # type: api → the gateway maps a direct host port (no subpath proxy), so
+      # the app is served at the root path (no Next.js basePath) and the bare
+      # /api/health healthcheck below is correct. Matches the working convention
+      # of the other installed apps (cc-monitor, getpod-manager) on this gateway.
+      - name: web
+        host: 3737
+        container: 4000
+        type: api
+    environment:
+      - DATABASE_URL=postgres://habithero:${DB_PASSWORD}@db:5432/habithero
+      # Uploaded photos + avatars must live on a mounted volume (decision #1),
+      # NOT the container filesystem — otherwise every rebuild/reinstall wipes
+      # them. The generator resolves this ./ path to an absolute bind mount.
+      - PHOTO_DIR=/data/photos
+      - DB_PASSWORD
+      - NEXTAUTH_SECRET
+      - NEXTAUTH_URL
+      # Shared service token the gateway agent presents as `x-agent-token`; the
+      # app rejects every agent call without it. Must be provided at install
+      # (tools/installs passes it) and matches the agent container's copy.
+      - AGENT_API_TOKEN
+    volumes:
+      - ./data/photos:/data/photos
+    depends_on: [db]
+    healthcheck:
+      test: wget -qO- http://127.0.0.1:4000/api/health
+      interval: 30s
+
+  db:
+    image: postgres:16-alpine
+    resources:
+      cpu: 0.25
+      memory: 256M
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    environment:
+      - POSTGRES_DB=habithero
+      - POSTGRES_USER=habithero
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - DB_PASSWORD
+    volumes:
+      - ./postgres/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -U habithero
+      interval: 10s
+
+  agent:
+    path: ./agent
+    name: habit-hero-bot

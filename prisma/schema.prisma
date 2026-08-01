@@ -1,0 +1,300 @@
+// HabitHero — Prisma schema (PRD §7 data model).
+//
+// Identity note (T02 / T18): fields that would have been telegram_user_id /
+// telegram_group_id are generalized to channel-neutral refs because channels
+// are the gateway's job, not HabitHero's. A User binds to a caller via a
+// one-time `linkCode` that the agent redeems to set `channelUserRef`.
+
+generator client {
+  provider      = "prisma-client-js"
+  // "native" for local dev; the openssl-3.0.x musl target is what the Alpine
+  // Docker image (node:20-alpine) needs — pin it so the build never falls back
+  // to the 1.1.x engine when OpenSSL auto-detection misfires.
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  parent
+  child
+}
+
+enum Recurrence {
+  daily
+  weekly
+  once
+}
+
+// A chore's kind of work. Drives the category badges (cleaner/bookworm/chef)
+// accurately instead of guessing from the title, and the category chips in the
+// create-chore drawer. `other` is the catch-all (design's "ของเล่น/อื่นๆ").
+enum ChoreCategory {
+  cleaning
+  reading
+  cooking
+  other
+  exercise
+  routine
+  helping
+}
+
+enum CompletionStatus {
+  pending
+  approved
+  rejected
+}
+
+enum RedemptionStatus {
+  pending
+  approved
+  rejected
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model Family {
+  id String @id @default(cuid())
+
+  name String
+
+  // channel-neutral group ref (was telegram_group_id) — set by the gateway.
+  channelGroupRef String? @map("channel_group_ref")
+
+  members User[]
+  chores  Chore[]
+  rewards Reward[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("families")
+}
+
+model User {
+  id String @id @default(cuid())
+
+  name     String
+  role     Role
+  familyId String @map("family_id")
+  family   Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  // channel-neutral caller id (was telegram_user_id), bound via linkCode.
+  channelUserRef String? @unique @map("channel_user_ref")
+  // one-time code the web issues; the agent redeems it once to bind the caller.
+  linkCode       String? @unique @map("link_code")
+
+  // Optional uploaded avatar photo. Stored on the local volume (lib/api/photo)
+  // and served family-scoped via GET /api/avatars/<file>. Null → fall back to
+  // the illustrated character faces on the UI side.
+  avatarUrl String? @map("avatar_url")
+
+  // Auth (parent). Children may log in with a PIN handled at the auth layer (T06).
+  email        String? @unique
+  passwordHash String? @map("password_hash")
+  // Child login: 4-digit PIN, bcrypt-hashed. Null for parents / kids without a PIN.
+  pinHash      String? @map("pin_hash")
+
+  progress            UserProgress?
+  assignedChores      Chore[]            @relation("ChoreAssignee")
+  completions         ChoreCompletion[]  @relation("CompletionCompleter")
+  reviewedCompletions ChoreCompletion[]  @relation("CompletionReviewer")
+  redemptions         RewardRedemption[] @relation("RedemptionRedeemer")
+  badges              UserBadge[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([familyId])
+  @@map("users")
+}
+
+model Chore {
+  id String @id @default(cuid())
+
+  title       String
+  description String?
+  familyId    String  @map("family_id")
+  family      Family  @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  // null = any child in the family may complete it.
+  assignedTo String? @map("assigned_to")
+  assignee   User?   @relation("ChoreAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+
+  xpValue          Int        @map("xp_value")
+  lateXpMultiplier Float      @default(0.6) @map("late_xp_multiplier")
+  recurrence       Recurrence @default(once)
+
+  // Kind of work — accurate source for the category badges + drawer chips.
+  category ChoreCategory @default(other)
+
+  // For weekly recurrence: which weekdays the chore applies to (0=Sun … 6=Sat,
+  // JS getDay convention, local time). Empty = every day of the week (the plain
+  // "รายสัปดาห์" default); a non-empty subset is the design's "กำหนดเอง".
+  recurDays Int[] @default([]) @map("recur_days")
+
+  // due_time is a time-of-day marker (e.g. "20:00"); active window uses dates.
+  dueTime     String?   @map("due_time")
+  activeFrom  DateTime? @map("active_from")
+  activeUntil DateTime? @map("active_until")
+
+  requirePhoto Boolean @default(true) @map("require_photo")
+  isExtra      Boolean @default(false) @map("is_extra")
+
+  completions ChoreCompletion[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([familyId])
+  @@index([assignedTo])
+  @@map("chores")
+}
+
+model ChoreCompletion {
+  id String @id @default(cuid())
+
+  choreId String @map("chore_id")
+  // Restrict (Prisma default for a required relation): deleting a chore that
+  // has completions is blocked, so historical completions never disappear.
+  chore   Chore  @relation(fields: [choreId], references: [id])
+
+  completedBy String @map("completed_by")
+  completer   User   @relation("CompletionCompleter", fields: [completedBy], references: [id])
+
+  photoUrl    String?  @map("photo_url")
+  submittedAt DateTime @default(now()) @map("submitted_at")
+
+  status     CompletionStatus @default(pending)
+  reviewedBy String?          @map("reviewed_by")
+  reviewer   User?            @relation("CompletionReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
+  reviewedAt DateTime?        @map("reviewed_at")
+
+  xpAwarded Int     @default(0) @map("xp_awarded")
+  feedback  String?
+
+  isTeam      Boolean  @default(false) @map("is_team")
+  teamMembers String[] @map("team_members")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([choreId])
+  @@index([completedBy])
+  @@index([status])
+  @@map("chore_completions")
+}
+
+model Reward {
+  id String @id @default(cuid())
+
+  title       String
+  description String?
+  familyId    String  @map("family_id")
+  family      Family  @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  xpCost    Int     @map("xp_cost")
+  iconEmoji String? @map("icon_emoji")
+
+  dailyLimit   Int? @map("daily_limit")
+  weeklyLimit  Int? @map("weekly_limit")
+  monthlyLimit Int? @map("monthly_limit")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  redemptions RewardRedemption[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([familyId])
+  @@map("rewards")
+}
+
+model RewardRedemption {
+  id String @id @default(cuid())
+
+  rewardId String @map("reward_id")
+  reward   Reward @relation(fields: [rewardId], references: [id], onDelete: Cascade)
+
+  redeemedBy String @map("redeemed_by")
+  redeemer   User   @relation("RedemptionRedeemer", fields: [redeemedBy], references: [id])
+
+  xpSpent     Int      @map("xp_spent")
+  requestedAt DateTime @default(now()) @map("requested_at")
+
+  status     RedemptionStatus @default(pending)
+  reviewedAt DateTime?        @map("reviewed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([rewardId])
+  @@index([redeemedBy])
+  @@index([status])
+  @@map("reward_redemptions")
+}
+
+model UserProgress {
+  id String @id @default(cuid())
+
+  userId String @unique @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  totalXp      Int @default(0) @map("total_xp")
+  currentLevel Int @default(1) @map("current_level")
+
+  currentStreak  Int       @default(0) @map("current_streak")
+  longestStreak  Int       @default(0) @map("longest_streak")
+  lastActiveDate DateTime? @map("last_active_date")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("user_progress")
+}
+
+model Badge {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  iconEmoji   String? @map("icon_emoji")
+
+  conditionType  String @map("condition_type")
+  conditionValue Int?   @map("condition_value")
+
+  userBadges UserBadge[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("badges")
+}
+
+model UserBadge {
+  id String @id @default(cuid())
+
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  badgeId String @map("badge_id")
+  badge   Badge  @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  earnedAt DateTime @default(now()) @map("earned_at")
+  // Null until the child has seen the "you earned a new badge!" celebration.
+  // Drives the "ใหม่ (new)" highlight + the one-time popup.
+  seenAt   DateTime? @map("seen_at")
+
+  @@unique([userId, badgeId])
+  @@index([badgeId])
+  @@map("user_badges")
+}

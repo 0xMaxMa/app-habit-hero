@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Unit tests (jsdom, no DB) — fast feedback on lib/ + component logic.
+  # ---------------------------------------------------------------------------
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run test
+
+  # ---------------------------------------------------------------------------
+  # 2. API integration — route handlers against a real Postgres.
+  # ---------------------------------------------------------------------------
+  api-integration:
+    name: api-integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: habithero
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: habithero_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U habithero"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # CI overrides .env.test's port (load-env.ts keeps existing env).
+      DATABASE_URL: postgres://habithero:test@localhost:5432/habithero_test
+      AGENT_API_TOKEN: test-agent-token
+      NEXTAUTH_SECRET: test-secret-please-change
+      NEXTAUTH_URL: http://localhost:4000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      - run: npm run test:integration
+
+  # ---------------------------------------------------------------------------
+  # 3. Web E2E — build the app, run Playwright (webServer boots `next start`).
+  # ---------------------------------------------------------------------------
+  web-e2e:
+    name: web-e2e
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: habithero
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: habithero_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U habithero"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://habithero:test@localhost:5432/habithero_test
+      AGENT_API_TOKEN: test-agent-token
+      NEXTAUTH_SECRET: test-secret-please-change
+      NEXTAUTH_URL: http://localhost:4000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      - run: npx tsx prisma/seed.test.ts
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 4. Docker + gateway install smoke — opt-in / self-hosted.
+  #
+  # The full gateway install flow (tools/tests/e2e-workflow.md) needs a running
+  # claude-gateway and Docker, which GitHub-hosted runners don't provide out of
+  # the box. Left disabled here as documentation of the intended job; run
+  # `scripts/docker-smoke.sh` on a self-hosted runner or locally instead.
+  # Flip `if:` to a manual condition to enable on self-hosted infra.
+  # ---------------------------------------------------------------------------
+  docker-gateway-e2e:
+    name: docker-gateway-e2e
+    runs-on: ubuntu-latest
+    if: ${{ false }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose smoke
+        run: bash scripts/docker-smoke.sh

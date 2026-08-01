@@ -1,0 +1,51 @@
+{
+  "name": "habit-hero",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 4000",
+    "build": "next build",
+    "start": "next start -p 4000",
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test",
+    "test:all": "npm run test && npm run test:integration",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:seed:dev": "tsx prisma/seed.dev.ts",
+    "db:seed:test": "tsx prisma/seed.test.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^2.4.3",
+    "next": "^14.2.15",
+    "next-auth": "^4.24.11",
+    "react": "^18",
+    "react-dom": "^18",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.2",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@vitest/coverage-v8": "^2.1.9",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8",
+    "eslint-config-next": "^14.2.15",
+    "jsdom": "^25.0.1",
+    "postcss": "^8.4.49",
+    "prettier": "^3.3.3",
+    "prisma": "^5.22.0",
+    "tailwindcss": "^3.4.15",
+    "tsx": "^4.23.1",
+    "typescript": "^5",
+    "vitest": "^2.1.9"
+  }
+}

@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ */
+/* HabitHero — "Cozy" base theme                                       */
+/* Warm cream paper, brown ink, rounded + tactile. Mobile-first.       */
+/* ------------------------------------------------------------------ */
+
+:root {
+  /* Semantic CSS vars mirror the Tailwind token scale so plain CSS /
+     inline styles and Tailwind classes stay in sync. */
+  --cozy-paper: #fffdf6;
+  --cozy-paper-sunk: #fbf5e9;
+  --cozy-surface: #ffffff;
+  --cozy-line: #e9dcc6;
+  --cozy-ink: #3f3227;
+  --cozy-ink-muted: #98856d;
+  --cozy-primary: #3e86c9;
+  --cozy-primary-deep: #27619b;
+  --cozy-xp: #f2a93b;
+  --cozy-success: #4e8a34;
+  --cozy-danger: #c0573a;
+
+  /* Cozy font stack — Mali (Thai + Latin display) leads, then Nunito, then a
+     graceful rounded system fallback. The two vars are injected by next/font
+     in app/layout.tsx; the design uses `Mali, Nunito`. */
+  --font-cozy: var(--font-mali), var(--font-nunito), 'Mali', 'Nunito',
+    ui-rounded, 'SF Pro Rounded', 'Segoe UI', system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* Paint the canvas (incl. iOS Safari's overscroll / dynamic-toolbar reveal
+       area) in the SHELL cream — matches `bg-cream-200` on the app root. Without
+       this, when iPadOS Safari's `dvh` resolves shorter than the visible area,
+       the strip below the shell showed the paler `body` paper (#fffdf6) and read
+       as a white band overflowing the screen. */
+    background-color: #fbf5e9; /* cream-200 — same as the app shell root */
+    /* Stop scroll chaining at the document. On iPadOS Safari a touch-drag that
+       starts on a non-scrollable region (e.g. the left sidebar nav) propagates
+       to the document, which then rubber-bands / scrolls the whole shell up and
+       exposes blank canvas below it. `none` pins the document so only real
+       scroll containers move. */
+    overscroll-behavior: none;
+  }
+
+  body {
+    background-color: var(--cozy-paper);
+    /* Subtle warm paper texture using layered radial dots */
+    background-image: radial-gradient(
+      circle at 1px 1px,
+      rgba(122, 90, 50, 0.05) 1px,
+      transparent 0
+    );
+    background-size: 22px 22px;
+    color: var(--cozy-ink);
+    font-family: var(--font-cozy);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Track the *visible* viewport like the rest of the shell (dvh), not 100vh
+       — on iOS Safari 100vh is the toolbar-collapsed height, taller than what's
+       on screen, which forced a body area beyond the shell. `vh` first as a
+       fallback for engines without `dvh`. */
+    min-height: 100vh;
+    min-height: 100dvh;
+    /* Mirrors the `html` rule above — Safari applies overscroll-behavior from
+       whichever of html/body wins the viewport propagation, so set both. */
+    overscroll-behavior: none;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: var(--cozy-ink);
+  }
+
+  /* Large, kid-friendly focus ring for accessibility */
+  :focus-visible {
+    outline: 3px solid rgba(62, 134, 201, 0.55);
+    outline-offset: 2px;
+  }
+}
