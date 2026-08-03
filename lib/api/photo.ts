@@ -80,6 +80,13 @@ const CONTENT_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
+  // Phone-library formats. The web client transcodes these to JPEG before
+  // upload, so they should never land here — but if a browser fails to decode
+  // one, serving the right type still lets an Apple device render it instead of
+  // downloading an octet-stream blob.
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+  '.avif': 'image/avif',
 }
 
 /**

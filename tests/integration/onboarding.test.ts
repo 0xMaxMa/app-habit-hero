@@ -37,7 +37,7 @@ describe('provisionOnboarding — starter content', () => {
     const withDays = STARTER_CHORES.find((c) => (c.recurDays?.length ?? 0) > 0)!
     const noPhoto = STARTER_CHORES.find((c) => !c.requirePhoto)!
 
-    const keys = [...new Set([withDue.key, withDays.key, noPhoto.key])]
+    const keys = Array.from(new Set([withDue.key, withDays.key, noPhoto.key]))
 
     const result = await provisionOnboarding(prisma, {
       familyId,

@@ -196,12 +196,14 @@ export function ChildTasks({ childId }: { childId: string }) {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Hidden photo picker (camera on mobile) shared by all chores. */}
+      {/* Hidden photo picker shared by all chores. Deliberately NO `capture`
+          attribute: that would force the camera and hide the photo library, so
+          a kid couldn't send a shot they took earlier. Without it the OS offers
+          both (camera / library / files). */}
       <input
         ref={fileInputRef}
         type="file"
         accept="image/*"
-        capture="environment"
         className="hidden"
         onChange={onPhotoPicked}
       />
@@ -347,7 +349,7 @@ function ChoreRow({
               <span className="text-xs font-bold text-ink-500">⏰ {chore.dueTime}</span>
             )}
             {chore.requirePhoto && (
-              <span className="text-xs font-bold text-ink-500">📷 ต้องถ่ายรูป</span>
+              <span className="text-xs font-bold text-ink-500">📷 ต้องมีรูป</span>
             )}
           </div>
         </div>
@@ -361,7 +363,7 @@ function ChoreRow({
         disabled={disabled}
         leftIcon={<span aria-hidden>{busy ? '⏳' : '✅'}</span>}
       >
-        {busy ? 'กำลังส่ง…' : chore.requirePhoto ? 'ถ่ายรูป แล้วส่งงาน' : 'ทำเสร็จแล้ว'}
+        {busy ? 'กำลังส่ง…' : chore.requirePhoto ? 'แนบรูป แล้วส่งงาน' : 'ทำเสร็จแล้ว'}
       </Button>
     </Card>
   )

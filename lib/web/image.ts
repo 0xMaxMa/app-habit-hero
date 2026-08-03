@@ -49,11 +49,24 @@ async function decode(file: File): Promise<Decoded> {
   }
 }
 
+/** Raster types every browser renders as-is — for these, re-encoding is purely
+ * a size optimization and we may safely keep the original. */
+const WEB_SAFE = /^image\/(jpeg|png|webp)$/
+/** Never re-encode: animation (GIF) or vector (SVG) would be destroyed. */
+const NEVER_ENCODE = /^image\/(gif|svg\+xml)$/
+
 /**
  * Downscale an image File to at most `maxDim` px on its longest edge, re-encoded
  * as JPEG. Returns a new File, or the original untouched when it is already
  * small enough, is not a raster image we can safely re-encode, or the browser
  * can't decode it (we never want the resize step to block a legitimate upload).
+ *
+ * Types outside WEB_SAFE (HEIC/HEIF/AVIF — what an iPhone photo library hands
+ * over) are ALWAYS transcoded when the browser can decode them, even if small:
+ * the app stores uploads verbatim and serves them by file extension, so a
+ * `.heic` would reach a parent's Android/desktop browser as an unrenderable
+ * blob. Apple platforms decode HEIC natively, which is exactly where such files
+ * come from, so the canvas path converts them at the source.
  *
  * @param maxDim  longest-edge cap in px (avatars 256, proof photos ~1280)
  * @param quality JPEG quality 0–1
@@ -63,10 +76,12 @@ export async function downscaleImage(
   maxDim = 256,
   quality = 0.85,
 ): Promise<File> {
-  // SSR guard + only touch raster types a canvas can faithfully re-encode.
-  // (SVG is not raster; GIF would lose animation — leave both as-is.)
-  const encodable = /^image\/(jpeg|png|webp)$/.test(file.type)
-  if (typeof document === 'undefined' || !encodable) return file
+  // SSR guard + skip anything a canvas can't faithfully re-encode.
+  const isImage = /^image\//.test(file.type)
+  if (typeof document === 'undefined' || !isImage || NEVER_ENCODE.test(file.type)) {
+    return file
+  }
+  const webSafe = WEB_SAFE.test(file.type)
 
   let decoded: Decoded | null = null
   try {
@@ -76,7 +91,8 @@ export async function downscaleImage(
     const scale = Math.min(1, maxDim / longest)
 
     // Already within bounds and not heavy → skip the needless re-encode.
-    if (scale === 1 && file.size <= 300 * 1024) return file
+    // Only for web-safe types; others must be transcoded regardless of size.
+    if (webSafe && scale === 1 && file.size <= 300 * 1024) return file
 
     const w = Math.max(1, Math.round(width * scale))
     const h = Math.max(1, Math.round(height * scale))
@@ -91,7 +107,10 @@ export async function downscaleImage(
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, 'image/jpeg', quality),
     )
-    if (!blob || blob.size >= file.size) return file // never grow the file
+    if (!blob) return file
+    // Never grow the file — unless the original is a format the web can't be
+    // trusted to render, where correctness beats a few extra KB.
+    if (webSafe && blob.size >= file.size) return file
 
     const base = file.name.replace(/\.[^.]+$/, '') || 'image'
     return new File([blob], `${base}.jpg`, { type: 'image/jpeg' })
