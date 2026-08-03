@@ -230,7 +230,6 @@ lib/
 components/ui/       ดีไซน์ระบบ (Card, Button, XpBadge, ProgressBar, Avatar, …)
 prisma/              schema, migrations, seed
 agent/               AGENTS.md / SOUL.md / skills/*.md — ตัว agent เป็น markdown ล้วน
-design/              PRD + งานออกแบบ + กลยุทธ์เทสต์
 tools/installs/      สคริปต์ติดตั้ง/ถอนผ่าน gateway API
 tests/               unit · integration · e2e
 ```

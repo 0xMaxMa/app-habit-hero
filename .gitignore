@@ -40,10 +40,10 @@ agent/.discord-state/
 agent/.line-state/
 
 # --- design working files ---------------------------------------------------
-# Export scratch dir + zipped bundle: large binaries and third-party reference
-# images with unclear licensing. The design docs + the Cozy mockup are tracked.
-design/_design_extract/
-design/HabitHero-design.zip
+# The whole directory stays private: PRD, task board, design prompts and the
+# Cozy mockup are internal working material, not part of what this repo ships.
+# Removed from history too — do not re-add.
+design/
 
 # --- misc -------------------------------------------------------------------
 .DS_Store
