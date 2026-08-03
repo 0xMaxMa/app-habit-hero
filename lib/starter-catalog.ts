@@ -518,6 +518,13 @@ export const STARTER_REWARDS: readonly StarterReward[] = [
   },
 ] as const
 
+const STARTER_REWARD_KEYS = new Set(STARTER_REWARDS.map((r) => r.key))
+
+/** True when `key` names a reward in the catalogue. */
+export function isStarterRewardKey(key: string): boolean {
+  return STARTER_REWARD_KEYS.has(key)
+}
+
 /** Look up a starter reward template by key (undefined if unknown). */
 export function starterRewardByKey(key: string): StarterReward | undefined {
   return STARTER_REWARDS.find((r) => r.key === key)

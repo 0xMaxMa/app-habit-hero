@@ -98,6 +98,11 @@ model User {
   // the illustrated character faces on the UI side.
   avatarUrl String? @map("avatar_url")
 
+  // Which illustrated character the member picked (panda, fox, rabbit, …).
+  // Only used when avatarUrl is null — an uploaded photo always wins. Null on
+  // rows created before members could choose, which render the default face.
+  avatarCharacter String? @map("avatar_character")
+
   // Auth (parent). Children may log in with a PIN handled at the auth layer (T06).
   email        String? @unique
   passwordHash String? @map("password_hash")

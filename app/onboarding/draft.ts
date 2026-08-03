@@ -14,6 +14,7 @@
  * onboardingSchema payload right before validation/submit.
  */
 
+import { STARTER_REWARDS } from '@/lib/onboarding'
 import type { MemberAvatar } from '@/lib/onboarding'
 import type { OnboardingInput } from '@/lib/onboarding'
 
@@ -25,6 +26,18 @@ export interface DraftMember {
   role: 'parent' | 'child'
   age: string
   pin: string
+  /** Co-parent sign-in credentials. Empty for children. */
+  email: string
+  password: string
+  /**
+   * A chosen avatar photo, held until the members exist. Nothing can be
+   * uploaded during the wizard because an avatar attaches to a user id that is
+   * only minted at finish, so the file waits here and is uploaded afterwards.
+   * Deliberately NOT persisted to localStorage — a File cannot survive JSON.
+   */
+  photo?: File | null
+  /** Object URL for the local preview of `photo` (also not persisted). */
+  photoPreview?: string | null
 }
 
 export interface OnboardingDraft {
@@ -33,6 +46,7 @@ export interface OnboardingDraft {
   familyName: string
   members: DraftMember[]
   starterChoreKeys: string[]
+  starterRewardKeys: string[]
 }
 
 export function newMember(role: 'parent' | 'child' = 'child'): DraftMember {
@@ -46,6 +60,10 @@ export function newMember(role: 'parent' | 'child' = 'child'): DraftMember {
     role,
     age: '',
     pin: '',
+    email: '',
+    password: '',
+    photo: null,
+    photoPreview: null,
   }
 }
 
@@ -55,6 +73,9 @@ export function emptyDraft(familyName = ''): OnboardingDraft {
     familyName,
     members: [newMember('child')],
     starterChoreKeys: [],
+    // Rewards start fully selected: a family that clicks straight through still
+    // ends up with a usable shop, which is what happened before the step existed.
+    starterRewardKeys: STARTER_REWARDS.map((r) => r.key),
   }
 }
 
@@ -83,6 +104,11 @@ export function loadDraft(userId: string, fallbackName: string): OnboardingDraft
       starterChoreKeys: Array.isArray(parsed.starterChoreKeys)
         ? parsed.starterChoreKeys.filter((k): k is string => typeof k === 'string')
         : [],
+      // A draft saved before the rewards step existed has no key list at all;
+      // treat that as "everything", matching what those families used to get.
+      starterRewardKeys: Array.isArray(parsed.starterRewardKeys)
+        ? parsed.starterRewardKeys.filter((k): k is string => typeof k === 'string')
+        : STARTER_REWARDS.map((r) => r.key),
     }
   } catch {
     return emptyDraft(fallbackName)
@@ -92,7 +118,13 @@ export function loadDraft(userId: string, fallbackName: string): OnboardingDraft
 export function saveDraft(userId: string, draft: OnboardingDraft): void {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(draftKey(userId), JSON.stringify(draft))
+    // Strip the pending photo + its object URL: a File is not JSON-serialisable
+    // and a blob: URL is dead on the next page load.
+    const persistable: OnboardingDraft = {
+      ...draft,
+      members: draft.members.map(({ photo: _photo, photoPreview: _preview, ...m }) => m),
+    }
+    window.localStorage.setItem(draftKey(userId), JSON.stringify(persistable))
   } catch {
     // Storage full / disabled — resumability is best-effort, never fatal.
   }
@@ -122,8 +154,11 @@ export function toPayload(draft: OnboardingDraft): OnboardingInput {
         role: m.role,
         age: ageNum !== undefined && Number.isFinite(ageNum) ? ageNum : undefined,
         pin: m.role === 'child' ? m.pin.trim() : undefined,
+        email: m.role === 'parent' ? m.email.trim() : undefined,
+        password: m.role === 'parent' ? m.password : undefined,
       }
     }),
     starterChoreKeys: draft.starterChoreKeys,
+    starterRewardKeys: draft.starterRewardKeys,
   }
 }

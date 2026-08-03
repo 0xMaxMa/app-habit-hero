@@ -1,31 +1,21 @@
 'use client'
 
-import {
-  Card,
-  CardTitle,
-  CardSubtitle,
-  XpBadge,
-  cn,
-} from '@/components/ui'
-import { STARTER_CHORES } from '@/lib/onboarding'
-
-const RECURRENCE_LABEL: Record<string, string> = {
-  daily: 'ทุกวัน',
-  weekly: 'รายสัปดาห์',
-  once: 'ครั้งเดียว',
-}
+import { Card, CardTitle, CardSubtitle, cn } from '@/components/ui'
+import { STARTER_REWARDS } from '@/lib/onboarding'
 
 /**
- * ChoresStep — pick starter chores from the curated catalogue (design S2
- * "เลือกงานเริ่มต้น"). XP is preset per chore; parents tune it later.
+ * RewardsStep — pick which starter rewards the family's shop opens with.
  *
- * Each row carries `min-w-0`: the rows are grid items, and a grid item defaults
- * to `min-width: auto`, which refuses to shrink below its content's min-content
- * width. Without it every row rendered 465px wide inside a 342px card and hung
- * over the edge (and scrolled the whole page sideways on a phone), no matter
- * what `truncate` said on the title inside.
+ * Rewards used to be created wholesale with no say from the parent, on the
+ * reasoning that a family with no completed chores yet has no basis to price
+ * them. The step exists now, but it opens fully selected and offers a one-tap
+ * "select all", so clicking straight through still yields the same usable shop
+ * it always did — nobody finishes onboarding with an empty rewards page.
+ *
+ * Row layout mirrors ChoresStep, `min-w-0` included: these are grid items, and
+ * without it a row cannot shrink below its content and overhangs the card.
  */
-export function ChoresStep({
+export function RewardsStep({
   selected,
   onChange,
   error,
@@ -35,7 +25,7 @@ export function ChoresStep({
   error?: string
 }) {
   const selectedSet = new Set(selected)
-  const allSelected = selected.length === STARTER_CHORES.length
+  const allSelected = selected.length === STARTER_REWARDS.length
 
   function toggle(key: string) {
     if (selectedSet.has(key)) {
@@ -46,14 +36,14 @@ export function ChoresStep({
   }
 
   function toggleAll() {
-    onChange(allSelected ? [] : STARTER_CHORES.map((c) => c.key))
+    onChange(allSelected ? [] : STARTER_REWARDS.map((r) => r.key))
   }
 
   return (
     <div>
-      <CardTitle className="text-xl">เลือกงานเริ่มต้น</CardTitle>
+      <CardTitle className="text-xl">เลือกของรางวัล</CardTitle>
       <CardSubtitle className="mt-1">
-        เราตั้ง XP ให้อัตโนมัติ ปรับได้ทุกเมื่อ · เลือกได้หลายงาน
+        ลูกใช้ XP ที่สะสมมาแลก · แก้ราคาและเพิ่มรางวัลเองได้ทีหลัง
       </CardSubtitle>
 
       <button
@@ -61,7 +51,9 @@ export function ChoresStep({
         onClick={toggleAll}
         className="mt-3 rounded-xl border-2 border-cream-600 bg-cream-50 px-3 py-1.5 text-sm font-extrabold text-primary-700 transition hover:border-primary-300"
       >
-        {allSelected ? 'ล้างที่เลือกทั้งหมด' : `เลือกทั้งหมด (${STARTER_CHORES.length} งาน)`}
+        {allSelected
+          ? 'ล้างที่เลือกทั้งหมด'
+          : `เลือกทั้งหมด (${STARTER_REWARDS.length} รางวัล)`}
       </button>
 
       {error ? (
@@ -71,14 +63,14 @@ export function ChoresStep({
       ) : null}
 
       <div className="mt-4 grid gap-2.5">
-        {STARTER_CHORES.map((c) => {
-          const on = selectedSet.has(c.key)
+        {STARTER_REWARDS.map((r) => {
+          const on = selectedSet.has(r.key)
           return (
             <button
-              key={c.key}
+              key={r.key}
               type="button"
               aria-pressed={on}
-              onClick={() => toggle(c.key)}
+              onClick={() => toggle(r.key)}
               className={cn(
                 'flex min-w-0 items-center gap-3 rounded-2xl border-2 p-3 text-left transition',
                 on
@@ -87,17 +79,16 @@ export function ChoresStep({
               )}
             >
               <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-cream-200 text-2xl">
-                {c.emoji}
+                {r.iconEmoji}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block line-clamp-2 font-extrabold text-ink-900">
-                  {c.title}
+                  {r.title}
                 </span>
                 <span className="block text-xs font-semibold text-ink-600">
-                  {RECURRENCE_LABEL[c.recurrence] ?? c.recurrence}
+                  {r.xpCost} XP
                 </span>
               </span>
-              <XpBadge value={c.xpValue} size="sm" />
               <span
                 aria-hidden
                 className={cn(
@@ -115,7 +106,7 @@ export function ChoresStep({
       </div>
 
       <Card variant="sunk" padding="sm" className="mt-4 text-sm font-semibold text-ink-600">
-        เลือกแล้ว {selected.length} จาก {STARTER_CHORES.length} งาน
+        เลือกแล้ว {selected.length} จาก {STARTER_REWARDS.length} รางวัล
       </Card>
     </div>
   )

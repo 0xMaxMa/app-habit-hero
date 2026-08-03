@@ -7,12 +7,13 @@ import {
   CardSubtitle,
   XpBadge,
 } from '@/components/ui'
-import { STARTER_CHORES, starterChoreByKey } from '@/lib/onboarding'
+import { STARTER_CHORES, STARTER_REWARDS, starterChoreByKey } from '@/lib/onboarding'
 import type { OnboardingDraft } from '../draft'
 
 /**
  * ReviewStep — final confirmation before writing to the DB (design S2 final
- * screen, "เริ่มใช้งาน 🎉"). Summarizes the family, members and chosen chores.
+ * screen, "เริ่มใช้งาน 🎉"). Summarizes the family, members, chosen chores and
+ * chosen rewards.
  * Invite/link codes are minted later from Settings once members exist (T15/T18),
  * so this step notes that rather than pretending to invite pre-creation.
  */
@@ -25,6 +26,9 @@ export function ReviewStep({
 }) {
   const chosen = STARTER_CHORES.filter((c) =>
     draft.starterChoreKeys.includes(c.key),
+  )
+  const chosenRewards = STARTER_REWARDS.filter((r) =>
+    draft.starterRewardKeys.includes(r.key),
   )
   const totalXp = draft.starterChoreKeys
     .map((k) => starterChoreByKey(k)?.xpValue ?? 0)
@@ -60,6 +64,7 @@ export function ReviewStep({
           <Card key={m.uid} padding="sm" className="flex items-center gap-3">
             <Avatar
               character={m.avatar}
+              src={m.photoPreview ?? undefined}
               size="sm"
               ring={m.role === 'child' ? 'primary' : 'none'}
             />
@@ -73,6 +78,8 @@ export function ReviewStep({
                 {m.role === 'child' && m.pin.trim().length === 4
                   ? ' · ตั้ง PIN แล้ว'
                   : ''}
+                {m.role === 'parent' && m.email.trim() ? ` · ${m.email.trim()}` : ''}
+                {m.photo ? ' · มีรูป' : ''}
               </span>
             </span>
           </Card>
@@ -106,6 +113,28 @@ export function ReviewStep({
           รวม XP ต่อรอบ <XpBadge value={totalXp} size="sm" />
         </div>
       ) : null}
+
+      {/* Rewards */}
+      <p className="mt-5 mb-2 text-xs font-bold text-ink-600">
+        ของรางวัล ({chosenRewards.length})
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {chosenRewards.length === 0 ? (
+          <span className="text-sm font-semibold text-ink-500">
+            ยังไม่ได้เลือกรางวัล
+          </span>
+        ) : (
+          chosenRewards.map((r) => (
+            <span
+              key={r.key}
+              className="inline-flex items-center gap-1.5 rounded-pill border-2 border-cream-600 bg-cream-100 px-3 py-1.5 text-sm font-bold text-ink-800"
+            >
+              <span aria-hidden>{r.iconEmoji}</span>
+              {r.title}
+            </span>
+          ))
+        )}
+      </div>
 
       <Card variant="sunk" padding="sm" className="mt-5 text-sm font-semibold text-ink-600">
         📨 อยากให้สมาชิกใช้งานผ่านแชท? สร้างรหัสเชิญ (invite code) ได้ในหน้า

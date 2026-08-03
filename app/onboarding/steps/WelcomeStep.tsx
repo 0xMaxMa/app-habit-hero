@@ -16,7 +16,7 @@ export function WelcomeStep({ onNext }: { onNext: () => void }) {
         ยินดีต้อนรับสู่ HabitHero
       </h1>
       <p className="mx-auto mt-2 max-w-xs text-sm font-semibold text-ink-600">
-        วินัยเล็ก ๆ ที่สร้างฮีโร่ตัวจริง — ตั้งค่าครอบครัวของคุณใน 4 ขั้นตอนง่าย ๆ
+        วินัยเล็ก ๆ ที่สร้างฮีโร่ตัวจริง — ตั้งค่าครอบครัวของคุณใน 5 ขั้นตอนง่าย ๆ
         ออกกลางคันได้ เดี๋ยวกลับมาทำต่อจากเดิม
       </p>
 
@@ -29,6 +29,9 @@ export function WelcomeStep({ onNext }: { onNext: () => void }) {
         </li>
         <li className="flex items-center gap-3">
           <span className="text-lg">🧹</span> เลือกงานเริ่มต้น (ตั้ง XP ให้อัตโนมัติ)
+        </li>
+        <li className="flex items-center gap-3">
+          <span className="text-lg">🎁</span> เลือกของรางวัลไว้ให้ลูกแลก
         </li>
       </ul>
 

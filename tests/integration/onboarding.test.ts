@@ -11,6 +11,7 @@
  * into a FRESH family to mirror a real first run.
  */
 
+import bcrypt from 'bcryptjs'
 import { describe, it, expect, beforeEach } from 'vitest'
 import { provisionOnboarding } from '@/lib/onboarding'
 import { STARTER_CHORES, STARTER_REWARDS } from '@/lib/starter-catalog'
@@ -45,6 +46,7 @@ describe('provisionOnboarding — starter content', () => {
       familyName: 'บ้านทดสอบ',
       members: [{ name: 'น้องเอ', role: 'child', avatar: 'panda', pin: '1234' }],
       starterChoreKeys: keys,
+      starterRewardKeys: STARTER_REWARDS.map((r) => r.key),
     })
 
     expect(result.choreCount).toBe(keys.length)
@@ -76,6 +78,7 @@ describe('provisionOnboarding — starter content', () => {
       familyName: 'บ้านทดสอบ',
       members: [{ name: 'น้องบี', role: 'child', avatar: 'fox', pin: '4321' }],
       starterChoreKeys: [STARTER_CHORES[0].key],
+      starterRewardKeys: STARTER_REWARDS.map((r) => r.key),
     })
 
     expect(result.rewardCount).toBe(STARTER_REWARDS.length)
@@ -107,6 +110,7 @@ describe('provisionOnboarding — starter content', () => {
         { name: 'น้องบี', role: 'child', avatar: 'fox', pin: '2222' },
       ],
       starterChoreKeys: [STARTER_CHORES[0].key],
+      starterRewardKeys: STARTER_REWARDS.map((r) => r.key),
     })
 
     expect(result.childCount).toBe(2)
@@ -131,11 +135,133 @@ describe('provisionOnboarding — starter content', () => {
         familyName: 'บ้านที่ไม่มีจริง',
         members: [{ name: 'น้องซี', role: 'child', avatar: 'panda', pin: '3333' }],
         starterChoreKeys: [STARTER_CHORES[0].key],
+        starterRewardKeys: STARTER_REWARDS.map((r) => r.key),
       }),
     ).rejects.toThrow()
 
     // Nothing leaked into the real family.
     expect(await prisma.chore.count({ where: { familyId } })).toBe(0)
     expect(await prisma.reward.count({ where: { familyId } })).toBe(0)
+  })
+})
+
+/**
+ * The wizard grew three things the DB has to actually honour: a co-parent who
+ * can sign in, an avatar choice that survives, and a reward selection instead
+ * of "everything, always". Each of those used to be a silent no-op or was not
+ * offered at all, so each gets a row-level assertion here.
+ */
+describe('provisionOnboarding — members and reward selection', () => {
+  it('creates a co-parent who can actually sign in (email + password hash)', async () => {
+    const { familyId, parentUserId } = await freshFamily()
+
+    await provisionOnboarding(prisma, {
+      familyId,
+      parentUserId,
+      familyName: 'บ้านสองผู้ปกครอง',
+      members: [
+        {
+          name: 'มะม๊า',
+          role: 'parent',
+          avatar: 'cat',
+          email: 'Mom@Example.com',
+          password: 'sup3r-secret',
+        },
+        { name: 'น้องเอ', role: 'child', avatar: 'rabbit', pin: '1234' },
+      ],
+      starterChoreKeys: [STARTER_CHORES[0].key],
+      starterRewardKeys: [STARTER_REWARDS[0].key],
+    })
+
+    const coParent = await prisma.user.findFirst({
+      where: { familyId, name: 'มะม๊า' },
+    })
+    expect(coParent?.role).toBe('parent')
+    // Lower-cased on the way in, so a capitalised retype still matches at login.
+    expect(coParent?.email).toBe('mom@example.com')
+    expect(coParent?.passwordHash).toBeTruthy()
+    expect(coParent?.passwordHash).not.toBe('sup3r-secret')
+    expect(await bcrypt.compare('sup3r-secret', coParent!.passwordHash!)).toBe(true)
+    // A co-parent has no PIN — that is the child login path.
+    expect(coParent?.pinHash).toBeNull()
+  })
+
+  it('persists the chosen avatar for every member', async () => {
+    const { familyId, parentUserId } = await freshFamily()
+
+    await provisionOnboarding(prisma, {
+      familyId,
+      parentUserId,
+      familyName: 'บ้านอวตาร์',
+      members: [
+        { name: 'น้องบี', role: 'child', avatar: 'chick', pin: '1111' },
+        { name: 'น้องซี', role: 'child', avatar: 'bear', pin: '2222' },
+      ],
+      starterChoreKeys: [STARTER_CHORES[0].key],
+      starterRewardKeys: [STARTER_REWARDS[0].key],
+    })
+
+    const b = await prisma.user.findFirst({ where: { familyId, name: 'น้องบี' } })
+    const c = await prisma.user.findFirst({ where: { familyId, name: 'น้องซี' } })
+    expect(b?.avatarCharacter).toBe('chick')
+    expect(c?.avatarCharacter).toBe('bear')
+  })
+
+  it('creates only the rewards that were selected', async () => {
+    const { familyId, parentUserId } = await freshFamily()
+    const picked = [STARTER_REWARDS[0].key, STARTER_REWARDS[2].key]
+
+    const result = await provisionOnboarding(prisma, {
+      familyId,
+      parentUserId,
+      familyName: 'บ้านเลือกรางวัล',
+      members: [{ name: 'น้องดี', role: 'child', avatar: 'panda', pin: '4444' }],
+      starterChoreKeys: [STARTER_CHORES[0].key],
+      starterRewardKeys: picked,
+    })
+
+    expect(result.rewardCount).toBe(2)
+    const rewards = await prisma.reward.findMany({ where: { familyId } })
+    expect(rewards.map((r) => r.title).sort()).toEqual(
+      [STARTER_REWARDS[0].title, STARTER_REWARDS[2].title].sort(),
+    )
+  })
+
+  it('reports every created member with its submitted index, for photo upload', async () => {
+    const { familyId, parentUserId } = await freshFamily()
+
+    const result = await provisionOnboarding(prisma, {
+      familyId,
+      parentUserId,
+      familyName: 'บ้านรูปโปรไฟล์',
+      members: [
+        { name: 'น้องอี', role: 'child', avatar: 'panda', pin: '5555' },
+        {
+          name: 'ปะป๊า',
+          role: 'parent',
+          avatar: 'fox',
+          email: 'dad@example.com',
+          password: 'another-secret',
+        },
+        { name: 'น้องเอฟ', role: 'child', avatar: 'cat', pin: '6666' },
+      ],
+      starterChoreKeys: [STARTER_CHORES[0].key],
+      starterRewardKeys: [STARTER_REWARDS[0].key],
+    })
+
+    // The wizard pairs file N with member N, so the indexes must line up with
+    // the order the members were submitted in — not with the child-only list.
+    expect(result.createdMembers.map((m) => m.index)).toEqual([0, 1, 2])
+    expect(result.createdMembers.map((m) => m.role)).toEqual([
+      'child',
+      'parent',
+      'child',
+    ])
+    const names = await Promise.all(
+      result.createdMembers.map(async (m) =>
+        (await prisma.user.findUnique({ where: { id: m.id } }))?.name,
+      ),
+    )
+    expect(names).toEqual(['น้องอี', 'ปะป๊า', 'น้องเอฟ'])
   })
 })

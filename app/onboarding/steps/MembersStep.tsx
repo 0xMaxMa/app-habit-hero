@@ -1,5 +1,6 @@
 'use client'
 
+import { useRef } from 'react'
 import {
   Avatar,
   Button,
@@ -8,13 +9,9 @@ import {
   CardSubtitle,
   cn,
 } from '@/components/ui'
-import { AVATARS, memberSchema, type MemberAvatar } from '@/lib/onboarding'
+import { AVATARS, AVATAR_LABELS, memberSchema } from '@/lib/onboarding'
+import { downscaleImage } from '@/lib/web/image'
 import { newMember, type DraftMember } from '../draft'
-
-const AVATAR_LABEL: Record<MemberAvatar, string> = {
-  panda: 'แพนด้า',
-  fox: 'สุนัขจิ้งจอก',
-}
 
 /** Validate one draft member, returning field errors keyed by path. */
 function memberErrors(m: DraftMember): Record<string, string> {
@@ -25,6 +22,8 @@ function memberErrors(m: DraftMember): Record<string, string> {
     role: m.role,
     age: ageNum !== undefined && Number.isFinite(ageNum) ? ageNum : undefined,
     pin: m.role === 'child' ? m.pin.trim() : undefined,
+    email: m.role === 'parent' ? m.email.trim() : undefined,
+    password: m.role === 'parent' ? m.password : undefined,
   })
   if (res.success) return {}
   const out: Record<string, string> = {}
@@ -51,13 +50,34 @@ function MemberEditor({
   onRemove: () => void
 }) {
   const errs = showErrors ? memberErrors(member) : {}
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  /**
+   * Hold the picked photo instead of uploading it: there is no member row yet
+   * to attach an avatar to. Shrink it here anyway — the same 256px cap the
+   * settings page uses — so a multi-MB phone photo is not carried around in
+   * memory until finish.
+   */
+  async function pickPhoto(file: File | undefined) {
+    if (!file) return
+    const small = await downscaleImage(file, 256).catch(() => file)
+    if (member.photoPreview) URL.revokeObjectURL(member.photoPreview)
+    onChange({ photo: small, photoPreview: URL.createObjectURL(small) })
+  }
+
+  function clearPhoto() {
+    if (member.photoPreview) URL.revokeObjectURL(member.photoPreview)
+    onChange({ photo: null, photoPreview: null })
+    if (fileRef.current) fileRef.current.value = ''
+  }
 
   return (
     <Card padding="md" className="space-y-4">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           <Avatar
             character={member.avatar}
+            src={member.photoPreview ?? undefined}
             size="md"
             ring={member.role === 'child' ? 'primary' : 'none'}
           />
@@ -115,25 +135,59 @@ function MemberEditor({
         </div>
       </div>
 
+      {/* Photo */}
+      <div>
+        <label className="mb-1 block text-xs font-bold text-ink-600">
+          รูปโปรไฟล์ (ไม่บังคับ)
+        </label>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => void pickPhoto(e.target.files?.[0])}
+        />
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => fileRef.current?.click()}
+            leftIcon={<span aria-hidden>📷</span>}
+          >
+            {member.photo ? 'เปลี่ยนรูป' : 'เลือกรูป'}
+          </Button>
+          {member.photo ? (
+            <Button variant="ghost" size="sm" onClick={clearPhoto}>
+              เอารูปออก
+            </Button>
+          ) : null}
+        </div>
+        <p className="mt-1 text-xs font-semibold text-ink-500">
+          {member.photo
+            ? 'ใช้รูปนี้แทนอวตาร์ · อัปโหลดตอนกดเสร็จสิ้น'
+            : 'ไม่เลือกก็ได้ — จะใช้อวตาร์ที่เลือกไว้'}
+        </p>
+      </div>
+
       {/* Avatar picker */}
       <div>
         <label className="mb-1 block text-xs font-bold text-ink-600">อวตาร์</label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className={cn('grid grid-cols-2 gap-2', member.photo && 'opacity-50')}>
           {AVATARS.map((a) => (
             <button
               key={a}
               type="button"
               onClick={() => onChange({ avatar: a })}
               className={cn(
-                'flex items-center gap-2 rounded-xl border-2 px-3 py-2 transition',
+                'flex min-w-0 items-center gap-2 rounded-xl border-2 px-3 py-2 transition',
                 member.avatar === a
                   ? 'border-primary-600 bg-primary-300/30'
                   : 'border-cream-600 bg-cream-50 hover:border-primary-300',
               )}
             >
               <Avatar character={a} size="sm" />
-              <span className="text-sm font-bold text-ink-800">
-                {AVATAR_LABEL[a]}
+              <span className="min-w-0 truncate text-sm font-bold text-ink-800">
+                {AVATAR_LABELS[a]}
               </span>
             </button>
           ))}
@@ -159,6 +213,46 @@ function MemberEditor({
           <p className="mt-1 text-xs font-semibold text-danger-500">{errs.age}</p>
         ) : null}
       </div>
+
+      {/* Sign-in credentials — co-parents only */}
+      {member.role === 'parent' ? (
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-xs font-bold text-ink-600">
+              อีเมล (สำหรับเข้าสู่ระบบ)
+            </label>
+            <input
+              type="email"
+              autoComplete="off"
+              value={member.email}
+              onChange={(e) => onChange({ email: e.target.value })}
+              placeholder="เช่น mom@example.com"
+              className="w-full rounded-xl border-2 border-cream-600 bg-cream-50 px-3 py-2.5 font-bold text-ink-900 outline-none focus:border-primary-500"
+            />
+            {errs.email ? (
+              <p className="mt-1 text-xs font-semibold text-danger-500">{errs.email}</p>
+            ) : null}
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-bold text-ink-600">
+              รหัสผ่าน (อย่างน้อย 8 ตัวอักษร)
+            </label>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={member.password}
+              onChange={(e) => onChange({ password: e.target.value })}
+              placeholder="••••••••"
+              className="w-full rounded-xl border-2 border-cream-600 bg-cream-50 px-3 py-2.5 font-bold text-ink-900 outline-none focus:border-primary-500"
+            />
+            {errs.password ? (
+              <p className="mt-1 text-xs font-semibold text-danger-500">
+                {errs.password}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {/* PIN — children only */}
       {member.role === 'child' ? (
@@ -189,8 +283,12 @@ function MemberEditor({
 
 /**
  * MembersStep — add children + extra parents (design S2 "เพิ่มสมาชิก").
- * Each member picks a panda/fox avatar, a role, an optional age, and (for
- * children) a 4-digit PIN. The signed-in parent is implicit and not listed.
+ *
+ * Each member picks an animal avatar (or uploads a photo, which wins), a role,
+ * an optional age, and then whatever that role needs to sign in: a 4-digit PIN
+ * for a child, an email + password for a co-parent. Without the latter a
+ * co-parent row exists but the person can never log in, which is the state this
+ * step used to leave them in. The signed-in parent is implicit and not listed.
  */
 export function MembersStep({
   members,

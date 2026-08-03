@@ -9,6 +9,7 @@ const STEP_LABELS: Record<(typeof ONBOARDING_STEPS)[number], string> = {
   family: 'ตั้งชื่อ',
   members: 'สมาชิก',
   chores: 'งานเริ่มต้น',
+  rewards: 'ของรางวัล',
   review: 'พร้อมลุย',
 }
 

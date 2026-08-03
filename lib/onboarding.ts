@@ -26,6 +26,7 @@ import {
   STARTER_CHORES,
   STARTER_REWARDS,
   isStarterChoreKey,
+  isStarterRewardKey,
 } from '@/lib/starter-catalog'
 
 // The starter catalogue itself lives in lib/starter-catalog.ts (it is also read
@@ -36,6 +37,7 @@ export {
   STARTER_REWARDS,
   starterChoreByKey,
   starterRewardByKey,
+  isStarterRewardKey,
 } from '@/lib/starter-catalog'
 export type { StarterChore, StarterReward } from '@/lib/starter-catalog'
 
@@ -48,6 +50,7 @@ export const ONBOARDING_STEPS = [
   'family',
   'members',
   'chores',
+  'rewards',
   'review',
 ] as const
 
@@ -91,13 +94,27 @@ export function isValidPinFormat(pin: string): boolean {
   return /^\d{4}$/.test(pin)
 }
 
-export const AVATARS = ['panda', 'fox'] as const
+export const AVATARS = ['panda', 'fox', 'rabbit', 'chick', 'cat', 'bear'] as const
 export type MemberAvatar = (typeof AVATARS)[number]
 
+/** Thai labels for the picker, kept next to the list so the two can't drift. */
+export const AVATAR_LABELS: Record<MemberAvatar, string> = {
+  panda: 'แพนด้า',
+  fox: 'จิ้งจอก',
+  rabbit: 'กระต่าย',
+  chick: 'ลูกเจี๊ยบ',
+  cat: 'แมว',
+  bear: 'หมี',
+}
+
 /**
- * A member added during onboarding. Children require a valid 4-digit PIN so
- * they can sign in (design S1). `age` is collected for UX but has no column in
- * the schema, so it is accepted and simply not persisted.
+ * A member added during onboarding.
+ *
+ * Children require a valid 4-digit PIN so they can sign in; a co-parent needs
+ * an email + password instead, because that is what the parent credentials
+ * provider authenticates against — without them the row exists but the person
+ * can never log in. `age` is collected for UX but has no column in the schema,
+ * so it is accepted and simply not persisted.
  */
 export const memberSchema = z
   .object({
@@ -106,6 +123,8 @@ export const memberSchema = z
     role: z.enum(['parent', 'child']).default('child'),
     age: z.number().int().min(2).max(25).optional(),
     pin: z.string().optional(),
+    email: z.string().trim().email('อีเมลไม่ถูกต้อง').optional(),
+    password: z.string().min(8, 'รหัสผ่านอย่างน้อย 8 ตัวอักษร').max(200).optional(),
   })
   .superRefine((m, ctx) => {
     if (m.role === 'child') {
@@ -116,6 +135,23 @@ export const memberSchema = z
           message: 'เด็กต้องมี PIN 4 หลัก',
         })
       }
+      return
+    }
+
+    // role === 'parent'
+    if (!m.email) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['email'],
+        message: 'ผู้ปกครองต้องมีอีเมลไว้เข้าสู่ระบบ',
+      })
+    }
+    if (!m.password) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['password'],
+        message: 'ผู้ปกครองต้องตั้งรหัสผ่าน',
+      })
     }
   })
 
@@ -134,6 +170,16 @@ export const onboardingSchema = z.object({
     })
     .refine((keys) => new Set(keys).size === keys.length, {
       message: 'งานเริ่มต้นซ้ำกัน',
+    }),
+  starterRewardKeys: z
+    .array(z.string())
+    .min(1, 'เลือกรางวัลอย่างน้อย 1 อย่าง')
+    .max(STARTER_REWARDS.length)
+    .refine((keys) => keys.every((k) => isStarterRewardKey(k)), {
+      message: 'พบรางวัลที่ไม่รู้จัก',
+    })
+    .refine((keys) => new Set(keys).size === keys.length, {
+      message: 'รางวัลซ้ำกัน',
     }),
 })
 
@@ -159,23 +205,25 @@ export interface ProvisionResult {
   createdChildIds: string[]
   createdChoreIds: string[]
   createdRewardIds: string[]
+  /**
+   * Every member created, in the order they were submitted. The wizard uploads
+   * avatar photos only after this returns, because a photo needs a user id to
+   * attach to — matching by index is what lets it pair file N with member N.
+   */
+  createdMembers: { index: number; id: string; role: 'parent' | 'child' }[]
 }
 
 /**
  * Turn a validated onboarding payload into rows, transactionally:
  *   - rename the parent's family,
  *   - ensure the parent has a UserProgress row,
- *   - create each member (children get a bcrypt-hashed PIN) + a UserProgress row,
+ *   - create each member (children get a bcrypt-hashed PIN, co-parents a
+ *     bcrypt-hashed password so they can actually sign in) + a UserProgress row,
  *   - create the selected starter chores,
- *   - create the whole starter reward catalogue.
+ *   - create the selected starter rewards.
  *
- * Rewards are not part of the wizard: with no chores completed yet a parent has
- * no basis to price them, so the family gets the full curated ladder and edits
- * it from the rewards page afterwards. Chores stay opt-in because they show up
- * on a child's "today" list immediately.
- *
- * PINs are hashed *before* opening the transaction so the transaction stays
- * short (no CPU-bound bcrypt work while it is held open).
+ * PINs and passwords are hashed *before* opening the transaction so the
+ * transaction stays short (no CPU-bound bcrypt work while it is held open).
  *
  * Accepts the Prisma client as an argument so it can run under the Next request
  * (with `@/lib/db`) or under an integration test with a throwaway client.
@@ -184,20 +232,31 @@ export async function provisionOnboarding(
   db: PrismaClient,
   params: ProvisionParams,
 ): Promise<ProvisionResult> {
-  const { familyId, parentUserId, familyName, members, starterChoreKeys } = params
+  const {
+    familyId,
+    parentUserId,
+    familyName,
+    members,
+    starterChoreKeys,
+    starterRewardKeys,
+  } = params
 
-  // Pre-hash PINs outside the transaction.
+  // Pre-hash PINs and passwords outside the transaction.
   const membersWithHash = await Promise.all(
     members.map(async (m) => ({
       name: m.name.trim(),
       role: m.role,
-      pinHash:
-        m.role === 'child' && m.pin ? await bcrypt.hash(m.pin, 10) : null,
+      avatarCharacter: m.avatar ?? null,
+      email: m.role === 'parent' && m.email ? m.email.trim().toLowerCase() : null,
+      pinHash: m.role === 'child' && m.pin ? await bcrypt.hash(m.pin, 10) : null,
+      passwordHash:
+        m.role === 'parent' && m.password ? await bcrypt.hash(m.password, 10) : null,
     })),
   )
 
-  // Resolve chosen starter chores in catalogue order (stable, de-duplicated).
+  // Resolve chosen starter content in catalogue order (stable, de-duplicated).
   const chosen = STARTER_CHORES.filter((c) => starterChoreKeys.includes(c.key))
+  const chosenRewards = STARTER_REWARDS.filter((r) => starterRewardKeys.includes(r.key))
 
   return db.$transaction(async (tx) => {
     await tx.family.update({
@@ -212,16 +271,22 @@ export async function provisionOnboarding(
     })
 
     const createdChildIds: string[] = []
-    for (const m of membersWithHash) {
+    const createdMembers: ProvisionResult['createdMembers'] = []
+    for (let index = 0; index < membersWithHash.length; index++) {
+      const m = membersWithHash[index]
       const user = await tx.user.create({
         data: {
           name: m.name,
           role: m.role,
           familyId,
+          avatarCharacter: m.avatarCharacter,
+          email: m.email,
+          passwordHash: m.passwordHash,
           pinHash: m.pinHash,
         },
       })
       await tx.userProgress.create({ data: { userId: user.id } })
+      createdMembers.push({ index, id: user.id, role: m.role })
       if (m.role === 'child') createdChildIds.push(user.id)
     }
 
@@ -246,7 +311,7 @@ export async function provisionOnboarding(
     }
 
     const createdRewardIds: string[] = []
-    for (const r of STARTER_REWARDS) {
+    for (const r of chosenRewards) {
       const reward = await tx.reward.create({
         data: {
           title: r.title,
@@ -271,6 +336,7 @@ export async function provisionOnboarding(
       createdChildIds,
       createdChoreIds,
       createdRewardIds,
+      createdMembers,
     }
   })
 }
