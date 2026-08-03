@@ -5,8 +5,8 @@
  * registration. Instead the very first run creates THE parent + THE family
  * once, and the door then closes.
  *
- *   GET  → { needsSetup } so the login page can offer "create the account"
- *          only while no parent exists.
+ *   GET  → { needsSetup } for clients that need the flag (the /setup page
+ *          guards itself with it; the login page redirects server-side).
  *   POST → create Family + parent User (bcrypt-hashed password) + UserProgress,
  *          but ONLY when no parent exists yet. A second attempt is a 409 so a
  *          public, unauthenticated endpoint can never mint a second family.
@@ -19,6 +19,7 @@
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { prisma } from '@/lib/db'
+import { needsSetup } from '@/lib/setup'
 import { withHandler, ok, parseBody, conflict } from '@/lib/api'
 
 export const dynamic = 'force-dynamic'
@@ -29,15 +30,6 @@ const bodySchema = z.object({
   parentName: z.string().trim().min(1).max(40).default('คุณพ่อคุณแม่'),
   familyName: z.string().trim().min(1).max(60).default('ครอบครัวของฉัน'),
 })
-
-/** True while the app has no parent yet (setup still required). */
-async function needsSetup(): Promise<boolean> {
-  const parent = await prisma.user.findFirst({
-    where: { role: 'parent' },
-    select: { id: true },
-  })
-  return parent === null
-}
 
 export const GET = withHandler(async () => {
   return ok({ needsSetup: await needsSetup() })
