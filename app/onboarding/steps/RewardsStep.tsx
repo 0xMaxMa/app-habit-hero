@@ -6,11 +6,10 @@ import { STARTER_REWARDS } from '@/lib/onboarding'
 /**
  * RewardsStep — pick which starter rewards the family's shop opens with.
  *
- * Rewards used to be created wholesale with no say from the parent, on the
- * reasoning that a family with no completed chores yet has no basis to price
- * them. The step exists now, but it opens fully selected and offers a one-tap
- * "select all", so clicking straight through still yields the same usable shop
- * it always did — nobody finishes onboarding with an empty rewards page.
+ * Nothing is ticked to begin with, the same as ChoresStep: a step that arrives
+ * pre-filled reads as already answered, so parents scrolled past a list of 16
+ * rewards they had not actually chosen. "เลือกทั้งหมด" is one tap away for the
+ * families that do want the lot.
  *
  * Row layout mirrors ChoresStep, `min-w-0` included: these are grid items, and
  * without it a row cannot shrink below its content and overhangs the card.

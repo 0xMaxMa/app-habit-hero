@@ -9,9 +9,9 @@
  * tests hold it to what each role actually needs to be valid.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { memberSchema } from '@/lib/onboarding'
-import { newMember, toMemberInput, emptyDraft, toPayload } from './draft'
+import { newMember, toMemberInput, emptyDraft, toPayload, loadDraft, draftKey } from './draft'
 import type { DraftMember } from './draft'
 
 function parent(over: Partial<DraftMember> = {}): DraftMember {
@@ -103,7 +103,31 @@ describe('toPayload', () => {
     expect(payload.members).toEqual([toMemberInput(child()), toMemberInput(parent())])
   })
 
-  it('starts a new draft with every reward selected', () => {
-    expect(emptyDraft().starterRewardKeys.length).toBeGreaterThan(0)
+  it('starts a new draft with nothing pre-picked, chores and rewards alike', () => {
+    expect(emptyDraft().starterChoreKeys).toEqual([])
+    expect(emptyDraft().starterRewardKeys).toEqual([])
+  })
+})
+
+describe('loadDraft', () => {
+  const uid = 'usr_draft_test'
+  beforeEach(() => window.localStorage.clear())
+
+  it('leaves rewards unpicked on a draft saved before the rewards step existed', () => {
+    window.localStorage.setItem(
+      draftKey(uid),
+      JSON.stringify({ stepIndex: 3, familyName: 'บ้านเก่า', starterChoreKeys: ['tidy_toys'] }),
+    )
+    const draft = loadDraft(uid, 'สำรอง')
+    expect(draft.starterRewardKeys).toEqual([])
+    expect(draft.starterChoreKeys).toEqual(['tidy_toys'])
+  })
+
+  it('restores a saved reward selection as-is', () => {
+    window.localStorage.setItem(
+      draftKey(uid),
+      JSON.stringify({ starterRewardKeys: ['movie_night', 42, 'ice_cream'] }),
+    )
+    expect(loadDraft(uid, '').starterRewardKeys).toEqual(['movie_night', 'ice_cream'])
   })
 })

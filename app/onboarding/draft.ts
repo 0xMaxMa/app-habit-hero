@@ -14,7 +14,6 @@
  * onboardingSchema payload right before validation/submit.
  */
 
-import { STARTER_REWARDS } from '@/lib/onboarding'
 import type { MemberAvatar } from '@/lib/onboarding'
 import type { OnboardingInput } from '@/lib/onboarding'
 
@@ -73,9 +72,7 @@ export function emptyDraft(familyName = ''): OnboardingDraft {
     familyName,
     members: [newMember('child')],
     starterChoreKeys: [],
-    // Rewards start fully selected: a family that clicks straight through still
-    // ends up with a usable shop, which is what happened before the step existed.
-    starterRewardKeys: STARTER_REWARDS.map((r) => r.key),
+    starterRewardKeys: [],
   }
 }
 
@@ -104,11 +101,12 @@ export function loadDraft(userId: string, fallbackName: string): OnboardingDraft
       starterChoreKeys: Array.isArray(parsed.starterChoreKeys)
         ? parsed.starterChoreKeys.filter((k): k is string => typeof k === 'string')
         : [],
-      // A draft saved before the rewards step existed has no key list at all;
-      // treat that as "everything", matching what those families used to get.
+      // Missing entirely on a draft saved before the rewards step existed;
+      // an empty list is the same start a new draft gets, so those families
+      // pick their rewards on the step like everyone else.
       starterRewardKeys: Array.isArray(parsed.starterRewardKeys)
         ? parsed.starterRewardKeys.filter((k): k is string => typeof k === 'string')
-        : STARTER_REWARDS.map((r) => r.key),
+        : [],
     }
   } catch {
     return emptyDraft(fallbackName)

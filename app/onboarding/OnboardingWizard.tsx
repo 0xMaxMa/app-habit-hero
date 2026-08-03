@@ -91,6 +91,15 @@ export function OnboardingWizard({
     if (ready) saveDraft(userId, draft)
   }, [ready, userId, draft])
 
+  // Every step starts at the top. This is an effect, not a line in the click
+  // handler, so it runs *after* the new step is on the page — scrolling from
+  // inside the handler moves the old step, which is a different (usually much
+  // taller) document, and leaves the browser to decide where the shorter one
+  // lands once it renders.
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0 })
+  }, [draft.stepIndex])
+
   if (!ready) {
     return <div className="min-h-[40vh]" aria-hidden />
   }
@@ -104,7 +113,6 @@ export function OnboardingWizard({
   function goTo(index: number) {
     const clamped = Math.max(0, Math.min(index, ONBOARDING_STEPS.length - 1))
     update({ stepIndex: clamped })
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0 })
   }
 
   /** Validate the current step; returns true when it is safe to advance. */
