@@ -189,7 +189,7 @@ repo นี้ **ไม่มีข้อมูลผู้ใช้จริง
 
 | ข้อมูล | อยู่ที่ไหน | เข้าฐานข้อมูลเมื่อไหร่ |
 |---|---|---|
-| 🏅 **เหรียญตรา** (28 แบบ) | `prisma/migrations/*_badges/` + `lib/badges.ts` | อัตโนมัติตอน `prisma migrate deploy` (ทุกครั้งที่บูต) |
+| 🏅 **เหรียญตรา** (28 แบบ) | `prisma/migrations/20260729055516_init/` + `lib/badges.ts` | อัตโนมัติตอน `prisma migrate deploy` (ทุกครั้งที่บูต) |
 | 📈 **เลเวล** (45 ขั้น / 9 ยศ / สูงสุด 200,000 XP) | `lib/level.ts` | ไม่มีตาราง — เป็นสูตรคำนวณในโค้ด |
 | 🧹 **งานบ้านตั้งต้น** | `lib/starter-catalog.ts` → `STARTER_CHORES` | ตอนจบ onboarding (ผู้ปกครองเลือกเอง) |
 | 🎁 **รางวัลตั้งต้น** | `lib/starter-catalog.ts` → `STARTER_REWARDS` | ตอนจบ onboarding (สร้างให้ทั้งชุด) |
