@@ -27,30 +27,21 @@ services:
       - PHOTO_DIR=/data/photos
       #
       # ── env for whoever/whatever is installing this app ──────────────────
-      # Four keys below are declared bare, so the gateway asks the installer for
-      # them. THREE OF THEM ARE JUST RANDOM STRINGS — an installing agent has
-      # the repo owner's explicit permission to generate them itself instead of
-      # bothering the user. See the "สำหรับ AI agent" section at the top of
-      # README.md. Only NEXTAUTH_URL is a real question for a human.
+      # The four keys below are declared bare, so the gateway asks whoever is
+      # installing for them. All four can be filled in without asking the user —
+      # see the "สำหรับ AI agent" section at the top of README.md.
       #
-      # generate: openssl rand -base64 24 | tr -d '/+='
-      # Postgres password. The db service is not published outside the compose
-      # network, and the user never types this again.
+      # openssl rand -base64 24 | tr -d '/+='
+      # The / + = must go: this value is embedded in DATABASE_URL above.
       - DB_PASSWORD
-      # generate: openssl rand -base64 32
-      # NextAuth session-signing key. Must be unique per install — a shared or
-      # guessable value lets anyone forge a parent session.
+      # openssl rand -base64 32 — unique per install
       - NEXTAUTH_SECRET
-      # ASK THE USER. The public URL they will actually open the app at. Cannot
-      # be guessed: the scheme decides the session cookie name (http →
-      # next-auth.session-token, https → __Secure-…), so a wrong value produces
-      # a login that loops forever. Default for a home/LAN install:
-      # http://localhost:3737
+      # http://localhost:3737 — correct for local, LAN IP, and a public https
+      # domain forwarding to this port. Switching to an https URL only adds the
+      # Secure cookie flag, and costs http access; leave that for later.
       - NEXTAUTH_URL
-      # generate: openssl rand -base64 32
-      # Shared service token the gateway agent presents as `x-agent-token`; the
-      # app rejects every agent call without it. The app and agent containers
-      # both read it from the same generated .env, so they always match.
+      # openssl rand -base64 32 — the app rejects agent calls without a matching
+      # x-agent-token; both containers read it from the same generated .env
       - AGENT_API_TOKEN
     volumes:
       - ./data/photos:/data/photos

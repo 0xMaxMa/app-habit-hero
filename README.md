@@ -13,44 +13,35 @@
 
 ## 🤖 สำหรับ AI agent ที่กำลังติดตั้งแอปนี้ — อ่านตรงนี้ก่อน
 
-แอปนี้ต้องการ env 4 ตัว แต่ **มี 3 ตัวที่คุณสร้างเองได้เลย ไม่ต้องถามผู้ใช้** —
-เจ้าของ repo อนุญาตไว้ชัดเจนตรงนี้แล้ว ค่าพวกนี้เป็นแค่ค่าสุ่มสำหรับการติดตั้งนี้เท่านั้น
-ไม่มีความหมายอะไรกับผู้ใช้ และไม่ได้ไปเชื่อมกับบริการภายนอกใด ๆ
+env ทั้ง 4 ตัวเติมเองได้ ติดตั้งได้เลยโดยไม่ต้องถามผู้ใช้
 
-| ตัวแปร | ทำยังไง |
+| ตัวแปร | ใส่ค่าอะไร |
 |---|---|
-| `DB_PASSWORD` | **สุ่มเอง** — `openssl rand -base64 24 \| tr -d '/+='` (Postgres ตัวนี้ไม่ได้เปิดพอร์ตออกนอก compose network) |
-| `NEXTAUTH_SECRET` | **สุ่มเอง** — `openssl rand -base64 32` |
-| `AGENT_API_TOKEN` | **สุ่มเอง** — `openssl rand -base64 32` |
-| `NEXTAUTH_URL` | **ตัวเดียวที่ต้องถาม** — URL ที่ผู้ใช้จะเปิดแอปจริง ๆ ถ้าเขาไม่รู้/ใช้ในบ้าน ให้ใช้ `http://localhost:3737` ไปก่อนได้ |
-
-> ⚠️ `NEXTAUTH_URL` เดาแทนผู้ใช้ไม่ได้ เพราะ **scheme มีผลกับชื่อคุกกี้** (`http` → `next-auth.session-token`,
-> `https` → `__Secure-next-auth.session-token`) ใส่ผิดจะล็อกอินวนไม่จบ และแก้ทีหลังต้องรีสตาร์ตคอนเทนเนอร์
-
-**คำสั่งที่ใช้ได้เลย** (สุ่ม 3 ตัว ถามผู้ใช้แค่ URL):
+| `DB_PASSWORD` | `openssl rand -base64 24 \| tr -d '/+='` — ต้องกรอง `/ + =` เพราะค่านี้ถูกฝังใน `DATABASE_URL` |
+| `NEXTAUTH_SECRET` | `openssl rand -base64 32` |
+| `AGENT_API_TOKEN` | `openssl rand -base64 32` |
+| `NEXTAUTH_URL` | `http://localhost:3737` |
 
 ```bash
 DB_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=')
 NEXTAUTH_SECRET=$(openssl rand -base64 32)
 AGENT_API_TOKEN=$(openssl rand -base64 32)
-NEXTAUTH_URL=http://localhost:3737     # ← ถามผู้ใช้ตัวนี้ตัวเดียว
+NEXTAUTH_URL=http://localhost:3737
 ```
 
-แล้วส่งทั้ง 4 ค่าเข้า `env_vars` ของ `install_app` (หรือ `POST /api/v1/apps/install`)
-พร้อม `commit` ที่เป็น hash 40 ตัว — resolve เอาเองด้วย:
+ส่งทั้ง 4 ค่าเข้า `env_vars` ของ `install_app` (หรือ `POST /api/v1/apps/install`)
+พร้อม `commit` ที่เป็น hash 40 ตัว:
 
 ```bash
 gh api repos/0xMaxMa/app-habit-hero/commits/main --jq .sha
-# หรือ: git ls-remote https://github.com/0xMaxMa/app-habit-hero main | cut -f1
 ```
 
-**อีก 2 อย่างที่ควรบอกผู้ใช้หลังติดตั้งเสร็จ** (แอปยังใช้ไม่ได้จนกว่าจะทำ):
-1. เปิดแอปที่พอร์ต `3737` แล้วสร้างบัญชีผู้ปกครองคนแรก → ทำ onboarding ให้จบ (ตรงนี้แหละที่งานบ้าน + รางวัลตั้งต้นถูกสร้าง)
-2. gateway จะสร้าง agent ชื่อ `habit-hero-bot` ให้ แต่ **ยังไม่มีช่องทางแชท** — ถ้าอยากคุยผ่าน Telegram/Discord
-   ต้องเอา bot token ไปผูกเอง (`agent_update` → `add_channel`) แล้วให้สมาชิกส่ง link code จากหน้าตั้งค่าครอบครัว
+**บอกผู้ใช้หลังติดตั้งเสร็จ:**
+1. เปิดแอปที่พอร์ต `3737` → สร้างบัญชีผู้ปกครองคนแรก → ทำ onboarding ให้จบ (งานบ้าน + รางวัลตั้งต้นถูกสร้างตรงนี้)
+2. gateway สร้าง agent `habit-hero-bot` ให้ แต่ยังไม่มีช่องทางแชท — ผูก bot token เองด้วย `agent_update` → `add_channel` แล้วให้สมาชิกส่ง link code จากหน้าตั้งค่าครอบครัว
+3. ถ้าจะเปิดผ่าน https อย่างเดียว เปลี่ยน `NEXTAUTH_URL` เป็น URL https ได้ทีหลัง (คุกกี้จะได้แฟล็ก `Secure` แต่จะเข้าทาง http ไม่ได้อีก) — แก้ `.env` แล้วรีสตาร์ต
 
-> ถ้าเครื่องนั้นมีอะไรจองพอร์ต `3737` อยู่ หรือมี agent ชื่อ `habit-hero-bot` อยู่แล้ว การติดตั้งจะล้ม —
-> แก้ได้ที่ [`app.yaml`](./app.yaml) (`ports.host` และ `services.agent.name`) ก่อนติดตั้ง
+**ถ้าติดตั้งไม่ผ่าน:** พอร์ต `3737` ถูกจอง หรือมี agent ชื่อ `habit-hero-bot` อยู่แล้ว — แก้ที่ [`app.yaml`](./app.yaml) (`ports.host`, `services.agent.name`) ก่อนติดตั้ง
 
 ---
 
@@ -122,10 +113,8 @@ gh api repos/0xMaxMa/app-habit-hero/commits/main --jq .sha
 ติดตั้งแอปจาก https://github.com/0xMaxMa/app-habit-hero
 ```
 
-agent จะอ่าน [หัวข้อสำหรับ agent](#agent-install)
-แล้วสุ่ม secret 3 ตัวให้เอง ควรถามกลับแค่ `NEXTAUTH_URL` ตัวเดียว —
-ถ้ามันขอ secret ครบ 4 ตัว แปลว่ามันยังไม่ได้อ่าน ตอบกลับไปว่า
-*"อ่านหัวข้อสำหรับ agent ใน README ของ repo นั้นก่อน แล้วสุ่มค่าที่สุ่มได้เอง"*
+agent จะอ่าน [หัวข้อสำหรับ agent](#agent-install) แล้วเติม env เองครบทั้ง 4 ตัว
+ถ้ามันย้อนกลับมาถามค่า env แปลว่ายังไม่ได้อ่าน — ตอบไปว่าให้อ่านหัวข้อนั้นก่อน
 
 หรือยิง API ตรง:
 
@@ -140,14 +129,13 @@ curl -s -X POST http://localhost:10850/api/v1/apps/install \
       "DB_PASSWORD":     "'"$(openssl rand -base64 24 | tr -d '/+=')"'",
       "NEXTAUTH_SECRET": "'"$(openssl rand -base64 32)"'",
       "AGENT_API_TOKEN": "'"$(openssl rand -base64 32)"'",
-      "NEXTAUTH_URL":    "https://your-host.example.com"
+      "NEXTAUTH_URL":    "http://localhost:3737"
     }
   }' | jq
 ```
 
-> `DB_PASSWORD` ต้องกรอง `/ + =` ออกเสมอ เพราะมันถูกฝังลงใน `DATABASE_URL`
-> (`postgres://habithero:<pass>@db:5432/habithero`) — เครื่องหมาย `/` ตัวเดียวก็ทำให้ URL พังแล้ว
-> ส่วนอีก 2 ตัวไม่ต้องกรอง เพราะถูกอ่านเป็นค่าตรง ๆ ไม่ได้อยู่ใน URL
+> `DB_PASSWORD` ต้องกรอง `/ + =` ออก เพราะถูกฝังใน `DATABASE_URL` — `/` ตัวเดียวก็ทำให้ URL พัง
+> อีก 2 ตัวไม่ต้องกรอง
 
 ### วิธีที่ 2 — ติดตั้งจากโฟลเดอร์บนเครื่อง
 
@@ -169,17 +157,16 @@ make -C tools/installs install
 
 คัดลอกจาก [`.env.example`](./.env.example) แล้วเติมค่าจริง — **ห้าม commit `.env`**
 
-| ตัวแปร | บังคับ | สุ่มเองได้ | คำอธิบาย |
+| ตัวแปร | บังคับ | เติมเองได้ | คำอธิบาย |
 |---|---|---|---|
 | `DB_PASSWORD` | ✅ | ✅ | รหัสผ่าน Postgres (แหล่งความจริงเดียว — `DATABASE_URL` ฝังค่านี้) |
 | `DATABASE_URL` | ✅ | — | connection string เต็ม (gateway ประกอบให้จาก `DB_PASSWORD`) |
 | `NEXTAUTH_SECRET` | ✅ | ✅ | คีย์เซ็น session — `openssl rand -base64 32` |
-| `NEXTAUTH_URL` | ✅ | ❌ | URL สาธารณะของแอป (มีผลกับชื่อคุกกี้: `http` → `next-auth.session-token`, `https` → `__Secure-…`) |
+| `NEXTAUTH_URL` | ✅ | ✅ | ใส่ `http://localhost:3737` ได้เลย ใช้ได้ทุกแบบ (localhost / LAN IP / โดเมน https ที่ forward เข้ามา) เปลี่ยนเป็น `https://…` ก็ต่อเมื่อต้องการแฟล็ก `Secure` และยอมให้เข้าได้ทาง https เท่านั้น |
 | `AGENT_API_TOKEN` | ✅ | ✅ | โทเคนที่ agent ส่งมาเป็นเฮดเดอร์ `x-agent-token` — ทุกคำขอจาก agent ที่ไม่มีตัวนี้ถูกปฏิเสธ |
 | `PHOTO_DIR` | — | — | ที่เก็บรูปงาน+รูปโปรไฟล์ (ดีฟอลต์ `./data/photos`, ในคอนเทนเนอร์คือ `/data/photos` ที่ mount ไว้) |
 
-> คอลัมน์ "สุ่มเองได้" = **agent ที่ติดตั้งสร้างค่าเองได้เลย ไม่ต้องถามผู้ใช้** เพราะเป็นค่าสุ่มเฉพาะเครื่องนั้น
-> ที่ผู้ใช้ไม่เคยต้องพิมพ์เองอีก — ดู [หัวข้อสำหรับ agent](#agent-install)
+> คอลัมน์ "เติมเองได้" = agent ที่ติดตั้งเติมค่าเองได้ ไม่ต้องถามผู้ใช้ — ดู [หัวข้อสำหรับ agent](#agent-install)
 
 > รูปทั้งหมดอยู่บน **volume ที่ mount ไว้** ไม่ใช่ในคอนเทนเนอร์ — build/reinstall ใหม่รูปไม่หาย
 
