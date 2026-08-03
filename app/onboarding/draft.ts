@@ -140,24 +140,35 @@ export function clearDraft(userId: string): void {
 }
 
 /**
- * Coerce the raw draft into the exact onboardingSchema payload: trim strings,
- * parse age to a number (or drop it), and strip PINs from non-children.
+ * Coerce ONE draft member into the exact shape memberSchema validates: trim
+ * strings, parse age to a number (or drop it), and keep only the credentials
+ * that role actually uses.
+ *
+ * Every caller that validates or submits a member goes through here — the
+ * wizard's "can I advance?" check, the per-field errors under the inputs, and
+ * the final payload. They used to each build this object themselves, and the
+ * moment co-parent email/password were added, the copy behind the Next button
+ * was the one that did not get them: a fully filled-in parent failed validation
+ * forever, under an error message about a PIN it does not have.
  */
+export function toMemberInput(m: DraftMember) {
+  const ageNum = m.age.trim() === '' ? undefined : Number(m.age)
+  return {
+    name: m.name.trim(),
+    avatar: m.avatar,
+    role: m.role,
+    age: ageNum !== undefined && Number.isFinite(ageNum) ? ageNum : undefined,
+    pin: m.role === 'child' ? m.pin.trim() : undefined,
+    email: m.role === 'parent' ? m.email.trim() : undefined,
+    password: m.role === 'parent' ? m.password : undefined,
+  }
+}
+
+/** Coerce the raw draft into the exact onboardingSchema payload. */
 export function toPayload(draft: OnboardingDraft): OnboardingInput {
   return {
     familyName: draft.familyName.trim(),
-    members: draft.members.map((m) => {
-      const ageNum = m.age.trim() === '' ? undefined : Number(m.age)
-      return {
-        name: m.name.trim(),
-        avatar: m.avatar,
-        role: m.role,
-        age: ageNum !== undefined && Number.isFinite(ageNum) ? ageNum : undefined,
-        pin: m.role === 'child' ? m.pin.trim() : undefined,
-        email: m.role === 'parent' ? m.email.trim() : undefined,
-        password: m.role === 'parent' ? m.password : undefined,
-      }
-    }),
+    members: draft.members.map(toMemberInput),
     starterChoreKeys: draft.starterChoreKeys,
     starterRewardKeys: draft.starterRewardKeys,
   }

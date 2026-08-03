@@ -14,6 +14,7 @@ import {
   emptyDraft,
   loadDraft,
   saveDraft,
+  toMemberInput,
   toPayload,
   type OnboardingDraft,
   type DraftMember,
@@ -31,16 +32,23 @@ const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? ''
 /** True when every member individually satisfies memberSchema. */
 function membersValid(members: DraftMember[]): boolean {
   if (members.length < 1) return false
-  return members.every((m) => {
-    const ageNum = m.age.trim() === '' ? undefined : Number(m.age)
-    return memberSchema.safeParse({
-      name: m.name.trim(),
-      avatar: m.avatar,
-      role: m.role,
-      age: ageNum !== undefined && Number.isFinite(ageNum) ? ageNum : undefined,
-      pin: m.role === 'child' ? m.pin.trim() : undefined,
-    }).success
-  })
+  return members.every((m) => memberSchema.safeParse(toMemberInput(m)).success)
+}
+
+/**
+ * Name what is actually missing, per role. A single "เด็กต้องมี PIN" line is
+ * wrong the moment the invalid member is a co-parent, who has no PIN at all.
+ */
+function membersErrorMessage(members: DraftMember[]): string {
+  const bad = members.filter((m) => !memberSchema.safeParse(toMemberInput(m)).success)
+  const roles = new Set(bad.map((m) => m.role))
+  if (roles.has('parent') && roles.has('child')) {
+    return 'กรุณากรอกข้อมูลสมาชิกให้ครบ — เด็กต้องมี PIN 4 หลัก · ผู้ปกครองต้องมีอีเมลและรหัสผ่าน (อย่างน้อย 8 ตัวอักษร)'
+  }
+  if (roles.has('parent')) {
+    return 'ผู้ปกครองต้องมีชื่อ อีเมล และรหัสผ่านอย่างน้อย 8 ตัวอักษร'
+  }
+  return 'กรุณากรอกข้อมูลสมาชิกให้ครบ (เด็กต้องมี PIN 4 หลัก)'
 }
 
 /**
@@ -117,7 +125,7 @@ export function OnboardingWizard({
         return false
       }
       if (!membersValid(draft.members)) {
-        setMembersFormError('กรุณากรอกข้อมูลสมาชิกให้ครบ (เด็กต้องมี PIN 4 หลัก)')
+        setMembersFormError(membersErrorMessage(draft.members))
         setShowMemberErrors(true)
         return false
       }

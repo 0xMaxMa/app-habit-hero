@@ -11,20 +11,11 @@ import {
 } from '@/components/ui'
 import { AVATARS, AVATAR_LABELS, memberSchema } from '@/lib/onboarding'
 import { downscaleImage } from '@/lib/web/image'
-import { newMember, type DraftMember } from '../draft'
+import { newMember, toMemberInput, type DraftMember } from '../draft'
 
 /** Validate one draft member, returning field errors keyed by path. */
 function memberErrors(m: DraftMember): Record<string, string> {
-  const ageNum = m.age.trim() === '' ? undefined : Number(m.age)
-  const res = memberSchema.safeParse({
-    name: m.name.trim(),
-    avatar: m.avatar,
-    role: m.role,
-    age: ageNum !== undefined && Number.isFinite(ageNum) ? ageNum : undefined,
-    pin: m.role === 'child' ? m.pin.trim() : undefined,
-    email: m.role === 'parent' ? m.email.trim() : undefined,
-    password: m.role === 'parent' ? m.password : undefined,
-  })
+  const res = memberSchema.safeParse(toMemberInput(m))
   if (res.success) return {}
   const out: Record<string, string> = {}
   for (const issue of res.error.issues) {
