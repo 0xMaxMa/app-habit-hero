@@ -27,22 +27,21 @@ services:
       - PHOTO_DIR=/data/photos
       #
       # ── env for whoever/whatever is installing this app ──────────────────
-      # The four keys below are declared bare, so the gateway asks whoever is
-      # installing for them. All four can be filled in without asking the user —
-      # see the "สำหรับ AI agent" section at the top of README.md.
+      # The three !generate keys get a fresh random value from the gateway at
+      # install time — nobody is asked for them. NEXTAUTH_URL is a URL, not a
+      # secret, so it stays bare; see the "สำหรับ AI agent" section in README.md.
       #
-      # openssl rand -base64 24 | tr -d '/+='
-      # The / + = must go: this value is embedded in DATABASE_URL above.
-      - DB_PASSWORD
-      # openssl rand -base64 32 — unique per install
-      - NEXTAUTH_SECRET
+      # base64url, not base64: this value is embedded in DATABASE_URL above, so
+      # it must not contain / + = .
+      - DB_PASSWORD=!generate:base64url:24
+      - NEXTAUTH_SECRET=!generate:base64:32
       # http://localhost:3737 — correct for local, LAN IP, and a public https
       # domain forwarding to this port. Switching to an https URL only adds the
       # Secure cookie flag, and costs http access; leave that for later.
       - NEXTAUTH_URL
-      # openssl rand -base64 32 — the app rejects agent calls without a matching
-      # x-agent-token; both containers read it from the same generated .env
-      - AGENT_API_TOKEN
+      # the app rejects agent calls without a matching x-agent-token; both
+      # containers read it from the same generated .env
+      - AGENT_API_TOKEN=!generate:base64:32
     volumes:
       - ./data/photos:/data/photos
     depends_on: [db]
@@ -60,7 +59,9 @@ services:
       - POSTGRES_DB=habithero
       - POSTGRES_USER=habithero
       - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - DB_PASSWORD
+      # Must stay byte-identical to the app service's marker: the generator
+      # dedups by key, so both containers share the one generated value.
+      - DB_PASSWORD=!generate:base64url:24
     volumes:
       - ./postgres/pgdata:/var/lib/postgresql/data
     healthcheck:
