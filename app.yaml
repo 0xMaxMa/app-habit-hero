@@ -58,10 +58,10 @@ services:
     environment:
       - POSTGRES_DB=habithero
       - POSTGRES_USER=habithero
+      # ${DB_PASSWORD} resolves from the .env the gateway generates once per
+      # install and shares with every service, so it is declared in the app
+      # service only — repeating the declaration here would change nothing.
       - POSTGRES_PASSWORD=${DB_PASSWORD}
-      # Must stay byte-identical to the app service's marker: the generator
-      # dedups by key, so both containers share the one generated value.
-      - DB_PASSWORD=!generate:base64url:24
     volumes:
       - ./postgres/pgdata:/var/lib/postgresql/data
     healthcheck:
