@@ -13,23 +13,20 @@
 
 ## 🤖 สำหรับ AI agent ที่กำลังติดตั้งแอปนี้ — อ่านตรงนี้ก่อน
 
-env ทั้ง 4 ตัวเติมเองได้ ติดตั้งได้เลยโดยไม่ต้องถามผู้ใช้
+ต้องใช้ claude-gateway **1.5.2 ขึ้นไป** · ส่ง env มาแค่ตัวเดียว ไม่ต้องถามผู้ใช้
 
-| ตัวแปร | ใส่ค่าอะไร |
+| ตัวแปร | ส่งค่าอะไร |
 |---|---|
-| `DB_PASSWORD` | `openssl rand -base64 24 \| tr -d '/+='` — ต้องกรอง `/ + =` เพราะค่านี้ถูกฝังใน `DATABASE_URL` |
-| `NEXTAUTH_SECRET` | `openssl rand -base64 32` |
-| `AGENT_API_TOKEN` | `openssl rand -base64 32` |
 | `NEXTAUTH_URL` | `http://localhost:3737` |
+| `DB_PASSWORD` | ไม่ต้องส่ง — gateway สุ่มให้ (`!generate:base64url:24` ใน `app.yaml`) |
+| `NEXTAUTH_SECRET` | ไม่ต้องส่ง — gateway สุ่มให้ (`!generate:base64:32`) |
+| `AGENT_API_TOKEN` | ไม่ต้องส่ง — gateway สุ่มให้ (`!generate:base64:32`) |
 
 ```bash
-DB_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=')
-NEXTAUTH_SECRET=$(openssl rand -base64 32)
-AGENT_API_TOKEN=$(openssl rand -base64 32)
 NEXTAUTH_URL=http://localhost:3737
 ```
 
-ส่งทั้ง 4 ค่าเข้า `env_vars` ของ `install_app` (หรือ `POST /api/v1/apps/install`)
+ส่งค่านี้เข้า `env_vars` ของ `install_app` (หรือ `POST /api/v1/apps/install`)
 พร้อม `commit` ที่เป็น hash 40 ตัว:
 
 ```bash
@@ -41,7 +38,9 @@ gh api repos/0xMaxMa/app-habit-hero/commits/main --jq .sha
 2. gateway สร้าง agent `habit-hero-bot` ให้ แต่ยังไม่มีช่องทางแชท — ผูก bot token เองด้วย `agent_update` → `add_channel` แล้วให้สมาชิกส่ง link code จากหน้าตั้งค่าครอบครัว
 3. ถ้าจะเปิดผ่าน https อย่างเดียว เปลี่ยน `NEXTAUTH_URL` เป็น URL https ได้ทีหลัง (คุกกี้จะได้แฟล็ก `Secure` แต่จะเข้าทาง http ไม่ได้อีก) — แก้ `.env` แล้วรีสตาร์ต
 
-**ถ้าติดตั้งไม่ผ่าน:** พอร์ต `3737` ถูกจอง หรือมี agent ชื่อ `habit-hero-bot` อยู่แล้ว — แก้ที่ [`app.yaml`](./app.yaml) (`ports.host`, `services.agent.name`) ก่อนติดตั้ง
+**ถ้าติดตั้งไม่ผ่าน:**
+- พอร์ต `3737` ถูกจอง หรือมี agent ชื่อ `habit-hero-bot` อยู่แล้ว — แก้ที่ [`app.yaml`](./app.yaml) (`ports.host`, `services.agent.name`) ก่อนติดตั้ง
+- gateway ต่ำกว่า 1.5.2 ยังไม่รู้จัก `!generate:` — มันจะไม่สุ่มค่าให้ และไม่ถามหาด้วย ผลคือ `POSTGRES_PASSWORD` ว่าง แล้ว Postgres ไม่ยอมบูต **ให้อัปเกรด gateway ก่อน** (ส่งค่าเองมาแทนพอช่วยให้ติดตั้งผ่านได้ แต่ตัวแปรในคอนเทนเนอร์จะเป็นสตริง `!generate:…` ตรงๆ)
 
 ---
 
@@ -113,7 +112,7 @@ gh api repos/0xMaxMa/app-habit-hero/commits/main --jq .sha
 ติดตั้งแอปจาก https://github.com/0xMaxMa/app-habit-hero
 ```
 
-agent จะอ่าน [หัวข้อสำหรับ agent](#agent-install) แล้วเติม env เองครบทั้ง 4 ตัว
+agent จะอ่าน [หัวข้อสำหรับ agent](#agent-install) แล้วส่ง `NEXTAUTH_URL` ไปตัวเดียว ที่เหลือ gateway สุ่มให้
 ถ้ามันย้อนกลับมาถามค่า env แปลว่ายังไม่ได้อ่าน — ตอบไปว่าให้อ่านหัวข้อนั้นก่อน
 
 หรือยิง API ตรง:
@@ -126,16 +125,13 @@ curl -s -X POST http://localhost:10850/api/v1/apps/install \
     "github_url": "https://github.com/0xMaxMa/app-habit-hero",
     "commit": "'"$(git ls-remote https://github.com/0xMaxMa/app-habit-hero main | cut -f1)"'",
     "env_vars": {
-      "DB_PASSWORD":     "'"$(openssl rand -base64 24 | tr -d '/+=')"'",
-      "NEXTAUTH_SECRET": "'"$(openssl rand -base64 32)"'",
-      "AGENT_API_TOKEN": "'"$(openssl rand -base64 32)"'",
-      "NEXTAUTH_URL":    "http://localhost:3737"
+      "NEXTAUTH_URL": "http://localhost:3737"
     }
   }' | jq
 ```
 
-> `DB_PASSWORD` ต้องกรอง `/ + =` ออก เพราะถูกฝังใน `DATABASE_URL` — `/` ตัวเดียวก็ทำให้ URL พัง
-> อีก 2 ตัวไม่ต้องกรอง
+> อีก 3 ตัว (`DB_PASSWORD`, `NEXTAUTH_SECRET`, `AGENT_API_TOKEN`) ไม่ต้องส่ง — gateway สุ่มให้เอง
+> ถ้าส่งมาด้วย gateway จะใช้ค่าที่ส่งแทนการสุ่ม
 
 ### วิธีที่ 2 — ติดตั้งจากโฟลเดอร์บนเครื่อง
 
@@ -157,16 +153,17 @@ make -C tools/installs install
 
 คัดลอกจาก [`.env.example`](./.env.example) แล้วเติมค่าจริง — **ห้าม commit `.env`**
 
-| ตัวแปร | บังคับ | เติมเองได้ | คำอธิบาย |
+| ตัวแปร | บังคับ | gateway สุ่มให้ | คำอธิบาย |
 |---|---|---|---|
-| `DB_PASSWORD` | ✅ | ✅ | รหัสผ่าน Postgres (แหล่งความจริงเดียว — `DATABASE_URL` ฝังค่านี้) |
+| `DB_PASSWORD` | ✅ | ✅ `base64url:24` | รหัสผ่าน Postgres (แหล่งความจริงเดียว — `DATABASE_URL` ฝังค่านี้ จึงต้องเป็น base64url ที่ไม่มี `/ + =`) |
 | `DATABASE_URL` | ✅ | — | connection string เต็ม (gateway ประกอบให้จาก `DB_PASSWORD`) |
-| `NEXTAUTH_SECRET` | ✅ | ✅ | คีย์เซ็น session — `openssl rand -base64 32` |
-| `NEXTAUTH_URL` | ✅ | ✅ | ใส่ `http://localhost:3737` ได้เลย ใช้ได้ทุกแบบ (localhost / LAN IP / โดเมน https ที่ forward เข้ามา) เปลี่ยนเป็น `https://…` ก็ต่อเมื่อต้องการแฟล็ก `Secure` และยอมให้เข้าได้ทาง https เท่านั้น |
-| `AGENT_API_TOKEN` | ✅ | ✅ | โทเคนที่ agent ส่งมาเป็นเฮดเดอร์ `x-agent-token` — ทุกคำขอจาก agent ที่ไม่มีตัวนี้ถูกปฏิเสธ |
+| `NEXTAUTH_SECRET` | ✅ | ✅ `base64:32` | คีย์เซ็น session |
+| `NEXTAUTH_URL` | ✅ | — | ใส่ `http://localhost:3737` ได้เลย ใช้ได้ทุกแบบ (localhost / LAN IP / โดเมน https ที่ forward เข้ามา) เปลี่ยนเป็น `https://…` ก็ต่อเมื่อต้องการแฟล็ก `Secure` และยอมให้เข้าได้ทาง https เท่านั้น |
+| `AGENT_API_TOKEN` | ✅ | ✅ `base64:32` | โทเคนที่ agent ส่งมาเป็นเฮดเดอร์ `x-agent-token` — ทุกคำขอจาก agent ที่ไม่มีตัวนี้ถูกปฏิเสธ |
 | `PHOTO_DIR` | — | — | ที่เก็บรูปงาน+รูปโปรไฟล์ (ดีฟอลต์ `./data/photos`, ในคอนเทนเนอร์คือ `/data/photos` ที่ mount ไว้) |
 
-> คอลัมน์ "เติมเองได้" = agent ที่ติดตั้งเติมค่าเองได้ ไม่ต้องถามผู้ใช้ — ดู [หัวข้อสำหรับ agent](#agent-install)
+> คอลัมน์ "gateway สุ่มให้" = ประกาศ `!generate:` ไว้ใน [`app.yaml`](./app.yaml) แล้ว ผู้ติดตั้งไม่ต้องกรอก (ต้องใช้ gateway ≥ 1.5.2)
+> ถ้าติดตั้งเองด้วยมือจาก `.env.example` ก็ต้องเติมค่าพวกนี้เอง
 
 > รูปทั้งหมดอยู่บน **volume ที่ mount ไว้** ไม่ใช่ในคอนเทนเนอร์ — build/reinstall ใหม่รูปไม่หาย
 
