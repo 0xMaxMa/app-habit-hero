@@ -236,7 +236,9 @@ export default function ChildProfilePage() {
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
         {/* ---- Left column ---- */}
-        <div className="space-y-5">
+        {/* min-w-0: a grid item defaults to min-width:auto, so the column would
+            size to its widest content instead of the phone. */}
+        <div className="min-w-0 space-y-5">
           {/* Hero card */}
           <section className="rounded-3xl bg-primary-fill p-6 text-cream-50 shadow-[0_10px_24px_rgba(62,134,201,.26)]">
             <div className="flex items-center gap-5">
@@ -338,8 +340,12 @@ export default function ChildProfilePage() {
                           <span className="w-0.5 flex-1 bg-cream-500" />
                         )}
                       </div>
-                      {/* body */}
-                      <div className="flex flex-1 items-center gap-3 rounded-2xl border-[1.5px] border-cream-400 bg-cream-100 px-3.5 py-3">
+                      {/* body — min-w-0 so the row can shrink below the title's
+                          width. Without it this flex item keeps min-width:auto,
+                          and `truncate` (white-space:nowrap) makes its
+                          min-content the WHOLE title, pushing the card, the main
+                          column and the page wider than the phone. */}
+                      <div className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border-[1.5px] border-cream-400 bg-cream-100 px-3.5 py-3">
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-extrabold text-ink-900">
                             {c.chore.title}
@@ -368,7 +374,7 @@ export default function ChildProfilePage() {
         </div>
 
         {/* ---- Right column ---- */}
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           {/* This week */}
           <Card>
             <h3 className="text-base font-black text-ink-900">สัปดาห์นี้</h3>
