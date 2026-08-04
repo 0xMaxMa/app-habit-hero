@@ -179,7 +179,18 @@ export const GET = withHandler(async (req) => {
       chore: { familyId: actor.familyId },
     },
     include: {
-      chore: { select: { id: true, title: true, xpValue: true, requirePhoto: true } },
+      // dueTime + lateXpMultiplier ride along so the approval queue can show the
+      // deadline a submission is judged against, and flag the late ones.
+      chore: {
+        select: {
+          id: true,
+          title: true,
+          xpValue: true,
+          requirePhoto: true,
+          dueTime: true,
+          lateXpMultiplier: true,
+        },
+      },
       completer: { select: { id: true, name: true, avatarUrl: true } },
     },
     orderBy: { submittedAt: 'asc' },

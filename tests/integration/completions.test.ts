@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { POST } from '@/app/api/completions/route'
+import { GET as listCompletions } from '@/app/api/completions/route'
 import { POST as approve } from '@/app/api/completions/[id]/approve/route'
 import { POST as reject } from '@/app/api/completions/[id]/reject/route'
 import { POST as unapprove } from '@/app/api/completions/[id]/unapprove/route'
@@ -122,6 +123,29 @@ describe('POST /api/completions — submit (A-TOOL-1)', () => {
     expect(env.error.code).toBe('BAD_REQUEST')
 
     expect(await prisma.choreCompletion.count()).toBe(0)
+  })
+})
+
+describe('GET /api/completions?status=pending — the approval queue', () => {
+  it('carries the chore deadline so a parent can see what the submission is judged against', async () => {
+    const { childARef, parentRef } = await getRefs()
+    const id = await submitDishes(childARef)
+
+    const res = await listCompletions(
+      new Request(`${COMPLETIONS_URL}?status=pending`, { headers: agentHeaders(parentRef) }),
+    )
+    const env = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(env.ok).toBe(true)
+    const row = env.data.completions.find((c: { id: string }) => c.id === id)
+    expect(row).toBeDefined()
+    // The queue is where a parent decides on-time vs late, so both halves of
+    // that rule have to reach the client — dueTime alone can't price a late
+    // submission, and the multiplier alone has nothing to compare against.
+    expect(row.chore.dueTime).toBe('20:00')
+    expect(typeof row.chore.lateXpMultiplier).toBe('number')
+    expect(row.submittedAt).toBeTruthy()
   })
 })
 

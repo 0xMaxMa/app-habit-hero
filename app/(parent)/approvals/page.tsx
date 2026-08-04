@@ -30,6 +30,10 @@ import {
 } from '@/components/ui'
 import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
+import { submittedLabel, timeAgo } from '@/lib/web/time'
+import { deadlineForDueTime, isLate } from '@/lib/point-rules'
+import { applyLatePenalty } from '@/lib/xp'
+import { THAI_LOCAL_OFFSET_MS } from '@/lib/clock'
 
 // ---- API response shapes (subset these screens read) ----------------------
 
@@ -38,7 +42,16 @@ interface PendingCompletion {
   status: 'pending' | 'approved' | 'rejected'
   photoUrl: string | null
   submittedAt: string
-  chore: { id: string; title: string; xpValue: number; requirePhoto: boolean }
+  chore: {
+    id: string
+    title: string
+    xpValue: number
+    requirePhoto: boolean
+    /** "HH:MM" local deadline, or null when the chore can be sent any time. */
+    dueTime: string | null
+    /** XP multiplier the late rule applies to this chore. */
+    lateXpMultiplier: number
+  }
   child: { id: string; name: string; avatarUrl: string | null }
 }
 interface PendingResponse {
@@ -60,20 +73,6 @@ type Toast = { kind: 'success' | 'error'; text: string } | null
 // Kids have no stored avatar art yet — rotate the two illustrated faces so the
 // queue feels warm rather than a wall of initials. Purely cosmetic.
 const AVATAR_CYCLE: AvatarCharacter[] = ['fox', 'panda']
-
-/** Friendly Thai "time ago" for a submission timestamp. */
-function timeAgo(iso: string): string {
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return ''
-  const diffMs = Date.now() - then
-  const mins = Math.floor(diffMs / 60_000)
-  if (mins < 1) return 'เมื่อสักครู่'
-  if (mins < 60) return `${mins} นาทีที่แล้ว`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs} ชั่วโมงที่แล้ว`
-  const days = Math.floor(hrs / 24)
-  return `${days} วันที่แล้ว`
-}
 
 // ---------------------------------------------------------------------------
 
@@ -427,6 +426,15 @@ function ApprovalCard({
   // value: red (−N) when the parent awards below the default, green (+N) above.
   const delta = xp - row.chore.xpValue
 
+  // Was this sent after the chore's deadline? Same +7 anchoring the approve API
+  // uses, so the chip here matches the rule the server would apply.
+  const submittedAt = new Date(row.submittedAt)
+  const deadline = deadlineForDueTime(submittedAt, row.chore.dueTime, THAI_LOCAL_OFFSET_MS)
+  const late = deadline !== null && isLate(deadline, submittedAt)
+  // What the late rule would award. Only offered as a shortcut — the parent
+  // still decides; nothing here changes the amount on its own.
+  const lateXp = applyLatePenalty(row.chore.xpValue, row.chore.lateXpMultiplier)
+
   return (
     <Card>
       <div className="flex items-start gap-3">
@@ -443,9 +451,24 @@ function ApprovalCard({
               {row.chore.title}
             </p>
             <XpBadge value={row.chore.xpValue} size="sm" />
+            {row.chore.dueTime && (
+              <span
+                className={cn(
+                  'text-xs font-bold',
+                  late ? 'text-danger-500' : 'text-ink-500',
+                )}
+              >
+                ⏰ {row.chore.dueTime}
+              </span>
+            )}
+            {late && (
+              <span className="rounded-pill bg-danger-100 px-2 py-0.5 text-xs font-extrabold text-danger-500">
+                สาย
+              </span>
+            )}
           </div>
           <p className="mt-0.5 text-sm font-semibold text-ink-600">
-            {row.child.name} · ส่งเมื่อ {timeAgo(row.submittedAt)}
+            {row.child.name} · {submittedLabel(submittedAt, new Date())}
           </p>
         </div>
 
@@ -492,13 +515,26 @@ function ApprovalCard({
             />
             <div className="flex justify-between text-xs font-semibold text-ink-500">
               <span>0</span>
-              <button
-                type="button"
-                onClick={() => setXp(row.chore.xpValue)}
-                className="font-bold text-primary-600 underline-offset-2 hover:underline"
-              >
-                ค่าเริ่มต้น {row.chore.xpValue}
-              </button>
+              <span className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setXp(row.chore.xpValue)}
+                  className="font-bold text-primary-600 underline-offset-2 hover:underline"
+                >
+                  ค่าเริ่มต้น {row.chore.xpValue}
+                </button>
+                {/* Late submissions: one tap to apply the rule the chore already
+                    declares, instead of doing the 60% arithmetic by hand. */}
+                {late && lateXp !== row.chore.xpValue && (
+                  <button
+                    type="button"
+                    onClick={() => setXp(lateXp)}
+                    className="font-bold text-danger-500 underline-offset-2 hover:underline"
+                  >
+                    ตามกติกาสาย {lateXp}
+                  </button>
+                )}
+              </span>
               <span>{xpMax}</span>
             </div>
           </div>
@@ -634,7 +670,7 @@ function RedemptionCard({
         <div className="min-w-0 flex-1">
           <p className="text-base font-extrabold text-ink-900">{r.reward.title}</p>
           <p className="mt-0.5 text-sm font-semibold text-ink-600">
-            {r.redeemer.name} · {timeAgo(r.requestedAt)}
+            {r.redeemer.name} · {timeAgo(new Date(r.requestedAt), new Date())}
           </p>
         </div>
         <span className="shrink-0 rounded-pill bg-danger-100 px-2.5 py-1 text-sm font-extrabold text-danger-500">
