@@ -16,7 +16,7 @@
 
 import type { Chore } from '@prisma/client'
 import type { Clock } from '@/lib/clock'
-import { dayNumber } from '@/lib/streak'
+import { dayNumber, weekNumber } from '@/lib/streak'
 import { prisma } from '@/lib/db'
 
 /**
@@ -56,6 +56,7 @@ export async function pendingTodayChores(
   })
 
   const today = dayNumber(now)
+  const thisWeek = weekNumber(now)
   // Local weekday (0=Sun … 6=Sat) for the weekly day-of-week filter. Families are
   // in Thailand (≈UTC+7), so read the weekday in local time, matching how the
   // create-chore drawer records recurDays.
@@ -74,11 +75,21 @@ export async function pendingTodayChores(
     }
 
     const forChore = completions.filter((c) => c.choreId === chore.id)
-    if (chore.recurrence === 'once') {
-      // One-off: any outstanding/approved completion removes it permanently.
-      return forChore.length === 0
+    switch (chore.recurrence) {
+      case 'once':
+        // One-off: any outstanding/approved completion removes it permanently.
+        return forChore.length === 0
+      case 'weekly':
+        // Once a week is enough — a weekly chore done on Monday is done for the
+        // rest of the week. This MUST match GET /api/chores/today, which is what
+        // the child ticks off; when the two disagreed, a weekly chore completed
+        // earlier in the week stayed "pending" here forever and no day could
+        // ever read as finished.
+        return !forChore.some((c) => weekNumber(c.submittedAt) === thisWeek)
+      case 'daily':
+      default:
+        // Only today's completion counts against a daily chore.
+        return !forChore.some((c) => dayNumber(c.submittedAt) === today)
     }
-    // Recurring: only today's completion counts against it.
-    return !forChore.some((c) => dayNumber(c.submittedAt) === today)
   })
 }

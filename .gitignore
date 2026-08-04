@@ -48,3 +48,6 @@ design/
 # --- misc -------------------------------------------------------------------
 .DS_Store
 *.log
+
+# Test photo uploads (PHOTO_DIR in .env.test)
+.tmp/

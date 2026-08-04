@@ -44,6 +44,8 @@ export const IDS = {
  * well as from the standalone CLI entrypoint below.
  */
 export async function seedTestData(prisma: PrismaClient) {
+  const now = new Date()
+
   // --- Curated badges (FK target for any UserBadge award) ---
   await seedBadges(prisma)
 
@@ -104,14 +106,18 @@ export async function seedTestData(prisma: PrismaClient) {
       userId: IDS.childA,
       totalXp: 150,
       currentLevel: 1,
+      // A live 2-day streak: the flame now lapses on read when the last active
+      // day is older than yesterday (lib/streak), so seeded state must carry one.
       currentStreak: 2,
       longestStreak: 2,
+      lastActiveDate: now,
     },
     update: {
       totalXp: 150,
       currentLevel: 1,
       currentStreak: 2,
       longestStreak: 2,
+      lastActiveDate: now,
     },
   })
 

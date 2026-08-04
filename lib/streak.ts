@@ -1,16 +1,22 @@
 /**
  * lib/streak.ts — daily streak tracking (PRD §6.3).
  *
- *   นับวันทำ chore ครบทุกอัน
+ *   นับวันที่เด็ก "ลงมือทำ" — วันไหนมีงานที่ถูกอนุมัติอย่างน้อย 1 ชิ้น = ติด 1 วัน
  *   Streak milestone: 3, 7, 14, 30, 100 วัน
- *   Streak break: ข้ามวันโดยไม่ทำครบ → reset เป็น 0
+ *   Streak break: ข้ามวันโดยไม่ทำอะไรเลย → กลับไป 0
  *
- * A "day" is a UTC calendar day (midnight-to-midnight, UTC). Every time-aware
- * function takes a {@link Clock}; nothing here reads `Date.now()`. Pure — no
- * Prisma, no React.
+ * The streak is *derived*, not nudged: {@link streakFromActiveDays} takes the
+ * set of days a child was active and returns the whole picture. That makes it
+ * idempotent (re-running never double-counts), order-independent (approving
+ * yesterday's chore today lands on yesterday), and self-healing after an undo —
+ * none of which a step-by-step counter can promise.
+ *
+ * A "day" for the streak is a *local* calendar day at {@link
+ * THAI_LOCAL_OFFSET_MS} — the same offset chore deadlines and the "ตื่นเช้า"
+ * window use — so a chore done at 06:00 counts for the morning it happened, not
+ * for the day before (which a UTC boundary would say). Pure — no Prisma, no
+ * React, no `Date.now()`.
  */
-
-import type { Clock } from './clock'
 
 /** Streak lengths that earn a milestone reward. */
 export const STREAK_MILESTONES = [3, 7, 14, 30, 100] as const
@@ -22,6 +28,23 @@ const MS_PER_DAY = 86_400_000
 /** UTC day index — same value for any instant within the same UTC calendar day. */
 export function dayNumber(date: Date): number {
   return Math.floor(date.getTime() / MS_PER_DAY)
+}
+
+/**
+ * UTC week index — the period a `weekly` chore is satisfied for. Derived from
+ * {@link dayNumber} so "this week" cannot drift from "today"; every caller
+ * deciding whether a weekly chore is still outstanding must use this one.
+ */
+export function weekNumber(date: Date): number {
+  return Math.floor(dayNumber(date) / 7)
+}
+
+/**
+ * Local day index — same value for any instant within the same local calendar
+ * day at `offsetMs` east of UTC. This is the day boundary the streak counts on.
+ */
+export function localDayNumber(date: Date, offsetMs: number): number {
+  return Math.floor((date.getTime() + offsetMs) / MS_PER_DAY)
 }
 
 /** Is `streak` exactly on a milestone boundary? */
@@ -37,97 +60,61 @@ export function milestoneReached(prev: number, next: number): StreakMilestone | 
   return null
 }
 
-export interface StreakState {
+export interface DerivedStreak {
+  /** Days in a row up to now — 0 once a whole day has been missed. */
   current: number
+  /** The longest run of consecutive active days ever recorded. */
   longest: number
-  /** Instant of the last day the user completed everything, or null if never. */
-  lastActiveDate: Date | null
-}
-
-export interface StreakUpdate {
-  state: StreakState
-  /** Streak went up by one (a fresh consecutive day). */
-  incremented: boolean
-  /** Streak was reset to 1 after a gap (or started from nothing). */
-  reset: boolean
-  /** Milestone newly reached by this update, else null. */
-  milestone: StreakMilestone | null
+  /** Highest active day index seen, or null when there were none. */
+  lastActiveDay: number | null
 }
 
 /**
- * Record that the user completed all of today's chores.
+ * Derive the streak from the days a child was active.
  *
- * - first ever completion → streak = 1
- * - same UTC day as last active → no change (idempotent within a day)
- * - exactly the next UTC day → streak + 1
- * - a gap of 2+ days → streak resets to 1
+ * `activeDays` are local day indices ({@link localDayNumber}) — duplicates and
+ * ordering do not matter. `today` is the same index for "now".
+ *
+ * The current run stays alive while the newest active day is today *or*
+ * yesterday: a child who has not done anything yet today has not broken
+ * anything, the day simply is not over. Two silent days in a row ends it.
  */
-export function recordCompletion(state: StreakState, clock: Clock): StreakUpdate {
-  const now = clock.now()
-  const today = dayNumber(now)
+export function streakFromActiveDays(activeDays: Iterable<number>, today: number): DerivedStreak {
+  const days = Array.from(new Set(activeDays)).sort((a, b) => a - b)
+  if (days.length === 0) return { current: 0, longest: 0, lastActiveDay: null }
 
-  if (state.lastActiveDate !== null) {
-    const last = dayNumber(state.lastActiveDate)
-    if (today === last) {
-      // Already counted today — no-op.
-      return { state, incremented: false, reset: false, milestone: null }
-    }
-    if (today < last) {
-      // Clock moved backwards; treat as no-op to stay monotonic.
-      return { state, incremented: false, reset: false, milestone: null }
-    }
-    if (today === last + 1) {
-      const current = state.current + 1
-      const next: StreakState = {
-        current,
-        longest: Math.max(state.longest, current),
-        lastActiveDate: now,
-      }
-      return {
-        state: next,
-        incremented: true,
-        reset: false,
-        milestone: milestoneReached(state.current, current),
-      }
-    }
-    // Gap of 2+ days → streak broke, restart at 1.
-    const next: StreakState = {
-      current: 1,
-      longest: Math.max(state.longest, 1),
-      lastActiveDate: now,
-    }
-    return {
-      state: next,
-      incremented: false,
-      reset: true,
-      milestone: milestoneReached(0, 1),
-    }
+  let longest = 1
+  let run = 1
+  for (let i = 1; i < days.length; i++) {
+    run = days[i] === days[i - 1] + 1 ? run + 1 : 1
+    if (run > longest) longest = run
   }
 
-  // First ever completion.
-  const next: StreakState = {
-    current: 1,
-    longest: Math.max(state.longest, 1),
-    lastActiveDate: now,
+  const last = days[days.length - 1]
+  let current = 0
+  if (last >= today - 1) {
+    current = 1
+    for (let i = days.length - 1; i > 0 && days[i - 1] === days[i] - 1; i--) current++
   }
-  return {
-    state: next,
-    incremented: true,
-    reset: false,
-    milestone: milestoneReached(0, 1),
-  }
+
+  return { current, longest, lastActiveDay: last }
 }
 
 /**
- * Has the streak lapsed as of `clock.now()`? True when more than one full day
- * has passed since the last active day (i.e. a day was missed).
+ * The streak to *show* right now for a stored row.
+ *
+ * A stored `currentStreak` is only ever written when something is approved, so
+ * a child who simply stops would keep their flame lit forever. Reads apply the
+ * same lapse rule {@link streakFromActiveDays} would: once the last active day
+ * is older than yesterday, the run is over.
  */
-export function isStreakBroken(state: StreakState, clock: Clock): boolean {
-  if (state.lastActiveDate === null) return false
-  return dayNumber(clock.now()) - dayNumber(state.lastActiveDate) > 1
-}
-
-/** Reset the current streak to 0, preserving `longest` and `lastActiveDate`. */
-export function resetStreak(state: StreakState): StreakState {
-  return { ...state, current: 0 }
+export function currentStreakAsOf(
+  stored: { current: number; lastActiveDate: Date | null },
+  now: Date,
+  offsetMs: number,
+): number {
+  if (stored.current === 0) return 0
+  if (stored.lastActiveDate === null) return 0
+  const gap = localDayNumber(now, offsetMs) - localDayNumber(stored.lastActiveDate, offsetMs)
+  return gap > 1 ? 0 : stored.current
 }

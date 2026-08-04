@@ -337,7 +337,10 @@ describe('POST /api/completions/:id/unapprove — undo an approval', () => {
     expect(env.data.completion.status).toBe('pending')
     expect(env.data.completion.xpRevoked).toBe(xp)
     expect(env.data.progress.totalXp).toBe(150)
-    expect(env.data.streakUnchanged).toBe(true)
+    // This was the child's only approved chore today, so undoing it takes the
+    // day back out of the streak — the response must not claim otherwise.
+    expect(env.data.streakUnchanged).toBe(false)
+    expect(env.data.streak).toEqual({ current: 0, changed: true })
 
     const row = await prisma.choreCompletion.findUniqueOrThrow({ where: { id } })
     expect(row.status).toBe('pending')

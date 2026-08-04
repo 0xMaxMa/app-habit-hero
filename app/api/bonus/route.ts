@@ -54,11 +54,11 @@ export const POST = withHandler(async (req) => {
 
   // Delegate the XP write + badge evaluation to the shared gamification path so
   // an XP-threshold badge (1,000 / 5,000 XP) is awarded the moment a bonus
-  // crosses it. A bonus is not a day-completion, so the streak is left untouched.
+  // crosses it. A bonus is not a chore, so it cannot light up a streak day on
+  // its own — the recompute inside just re-reads the same completion history.
   const gamification = await applyGamification({
     userId: target.id,
     xpDelta: amount,
-    completedDay: false,
     allChoresDoneBeforeNoon: false,
     clock: systemClock,
   })

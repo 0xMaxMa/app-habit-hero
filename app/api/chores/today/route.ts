@@ -27,16 +27,11 @@ import {
   notFound,
 } from '@/lib/api'
 import { systemClock } from '@/lib/clock'
-import { dayNumber } from '@/lib/streak'
+import { dayNumber, weekNumber } from '@/lib/streak'
 
 const querySchema = z.object({
   child: z.string().min(1).optional(),
 })
-
-/** UTC week index derived from the shared UTC day index. */
-function weekNumber(date: Date): number {
-  return Math.floor(dayNumber(date) / 7)
-}
 
 export const GET = withHandler(async (req) => {
   const actor = await resolveActor(req)

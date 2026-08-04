@@ -1,17 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import {
   STREAK_MILESTONES,
+  currentStreakAsOf,
   dayNumber,
   isMilestone,
+  localDayNumber,
   milestoneReached,
-  recordCompletion,
-  isStreakBroken,
-  resetStreak,
-  type StreakState,
+  streakFromActiveDays,
+  weekNumber,
 } from './streak'
-import { createFakeClock } from './clock'
+import { THAI_LOCAL_OFFSET_MS } from './clock'
 
-const fresh: StreakState = { current: 0, longest: 0, lastActiveDate: null }
+/** Local day index for a literal instant, at the offset the streak runs on. */
+const day = (iso: string) => localDayNumber(new Date(iso), THAI_LOCAL_OFFSET_MS)
 
 describe('milestones', () => {
   it('exposes the PRD milestone set', () => {
@@ -42,119 +43,118 @@ describe('dayNumber', () => {
   })
 })
 
-describe('recordCompletion — streak crossing midnight (fake clock)', () => {
-  it('starts a streak at 1 on the first completion', () => {
-    const clock = createFakeClock('2026-07-29T20:00:00Z')
-    const u = recordCompletion(fresh, clock)
-    expect(u.state.current).toBe(1)
-    expect(u.state.longest).toBe(1)
-    expect(u.incremented).toBe(true)
-    expect(u.reset).toBe(false)
+describe('weekNumber', () => {
+  it('is stable across seven days and rolls exactly one week later', () => {
+    const start = new Date('2026-07-30T09:00:00Z')
+    expect(weekNumber(new Date('2026-08-04T09:00:00Z'))).toBe(weekNumber(start))
+    expect(weekNumber(new Date(start.getTime() + 7 * 86_400_000))).toBe(weekNumber(start) + 1)
   })
 
-  it('increments when the next completion lands just past midnight', () => {
-    const clock = createFakeClock('2026-07-29T23:59:00Z')
-    const day1 = recordCompletion(fresh, clock)
-    expect(day1.state.current).toBe(1)
-
-    // cross midnight into the next UTC day
-    clock.set('2026-07-30T00:01:00Z')
-    const day2 = recordCompletion(day1.state, clock)
-    expect(day2.state.current).toBe(2)
-    expect(day2.incremented).toBe(true)
-    expect(day2.state.longest).toBe(2)
-  })
-
-  it('is idempotent for multiple completions on the same UTC day', () => {
-    const clock = createFakeClock('2026-07-29T08:00:00Z')
-    const first = recordCompletion(fresh, clock)
-    clock.set('2026-07-29T21:00:00Z') // later same day
-    const second = recordCompletion(first.state, clock)
-    expect(second.state.current).toBe(1)
-    expect(second.incremented).toBe(false)
-  })
-
-  it('resets to 1 after a gap of 2+ days', () => {
-    const clock = createFakeClock('2026-07-29T20:00:00Z')
-    const day1 = recordCompletion(fresh, clock)
-    clock.advanceDays(2) // skip the 30th entirely
-    const afterGap = recordCompletion(day1.state, clock)
-    expect(afterGap.state.current).toBe(1)
-    expect(afterGap.reset).toBe(true)
-    expect(afterGap.incremented).toBe(false)
-    // longest preserved from before? day1 longest was 1, so still 1
-    expect(afterGap.state.longest).toBe(1)
-  })
-
-  it('emits a milestone when the streak reaches 7 consecutive days', () => {
-    const clock = createFakeClock('2026-07-01T12:00:00Z')
-    let state = fresh
-    const milestones: (number | null)[] = []
-    for (let day = 0; day < 7; day++) {
-      clock.set(new Date(Date.UTC(2026, 6, 1 + day, 12, 0, 0)))
-      const u = recordCompletion(state, clock)
-      state = u.state
-      milestones.push(u.milestone)
-    }
-    expect(state.current).toBe(7)
-    // milestone(7) fires exactly on the 7th day's update
-    expect(milestones).toEqual([null, null, 3, null, null, null, 7])
-  })
-
-  it('tracks longest across a reset', () => {
-    const clock = createFakeClock('2026-07-01T12:00:00Z')
-    let state = fresh
-    for (let day = 0; day < 4; day++) {
-      clock.set(new Date(Date.UTC(2026, 6, 1 + day, 12, 0, 0)))
-      state = recordCompletion(state, clock).state
-    }
-    expect(state.current).toBe(4)
-    // gap
-    clock.set(new Date(Date.UTC(2026, 6, 10, 12, 0, 0)))
-    const afterGap = recordCompletion(state, clock)
-    expect(afterGap.state.current).toBe(1)
-    expect(afterGap.state.longest).toBe(4)
+  it('rolls on Thursday — day 0 of the index is 1 Jan 1970, a Thursday', () => {
+    // Pinning the real (surprising) boundary: a weekly chore resets Thursday
+    // 00:00 UTC = 07:00 Thai, NOT Monday like the "สัปดาห์นี้" strip in the UI.
+    expect(weekNumber(new Date('2026-08-05T23:59:00Z'))).toBe(
+      weekNumber(new Date('2026-08-06T00:00:00Z')) - 1,
+    )
   })
 })
 
-describe('isStreakBroken', () => {
-  const clock = createFakeClock('2026-07-29T12:00:00Z')
-  const state: StreakState = {
-    current: 5,
-    longest: 5,
-    lastActiveDate: new Date('2026-07-29T20:00:00Z'),
-  }
-
-  it('is not broken on the same day', () => {
-    clock.set('2026-07-29T23:00:00Z')
-    expect(isStreakBroken(state, clock)).toBe(false)
+describe('localDayNumber', () => {
+  it('rolls at local midnight, not UTC midnight', () => {
+    // 06:00 Thai on 30 July is still 29 July in UTC — the child did their
+    // morning chore on the 30th and it must count for the 30th.
+    const morning = new Date('2026-07-29T23:00:00Z') // 06:00 +07
+    const evening = new Date('2026-07-30T14:00:00Z') // 21:00 +07, same local day
+    expect(day('2026-07-29T23:00:00Z')).toBe(day('2026-07-30T14:00:00Z'))
+    expect(localDayNumber(morning, THAI_LOCAL_OFFSET_MS)).toBe(
+      dayNumber(new Date('2026-07-29T23:00:00Z')) + 1,
+    )
+    expect(localDayNumber(evening, THAI_LOCAL_OFFSET_MS)).toBe(
+      localDayNumber(morning, THAI_LOCAL_OFFSET_MS),
+    )
   })
 
-  it('is not broken on the very next day (still recoverable)', () => {
-    clock.set('2026-07-30T09:00:00Z')
-    expect(isStreakBroken(state, clock)).toBe(false)
-  })
-
-  it('is broken once a full day has been skipped', () => {
-    clock.set('2026-07-31T09:00:00Z')
-    expect(isStreakBroken(state, clock)).toBe(true)
-  })
-
-  it('is never broken for a user who never started', () => {
-    expect(isStreakBroken(fresh, clock)).toBe(false)
+  it('a chore done just before local midnight still belongs to that day', () => {
+    expect(day('2026-07-30T16:59:00Z')).toBe(day('2026-07-30T00:00:00Z')) // 23:59 vs 07:00 +07
+    expect(day('2026-07-30T17:00:00Z')).toBe(day('2026-07-30T00:00:00Z') + 1) // 00:00 +07 next day
   })
 })
 
-describe('resetStreak', () => {
-  it('zeroes current but keeps longest and lastActiveDate', () => {
-    const state: StreakState = {
-      current: 9,
-      longest: 12,
-      lastActiveDate: new Date('2026-07-29T20:00:00Z'),
-    }
-    const reset = resetStreak(state)
-    expect(reset.current).toBe(0)
-    expect(reset.longest).toBe(12)
-    expect(reset.lastActiveDate).toEqual(state.lastActiveDate)
+describe('streakFromActiveDays', () => {
+  const today = day('2026-08-04T12:00:00Z')
+
+  it('is 0 when the child has never had anything approved', () => {
+    expect(streakFromActiveDays([], today)).toEqual({
+      current: 0,
+      longest: 0,
+      lastActiveDay: null,
+    })
+  })
+
+  it('counts one approved day as a 1-day streak', () => {
+    const s = streakFromActiveDays([today], today)
+    expect(s.current).toBe(1)
+    expect(s.longest).toBe(1)
+    expect(s.lastActiveDay).toBe(today)
+  })
+
+  it('counts consecutive days regardless of order or duplicates', () => {
+    // Several chores approved per day, listed newest-first — same answer.
+    const s = streakFromActiveDays(
+      [today, today - 1, today, today - 2, today - 1, today - 2],
+      today,
+    )
+    expect(s.current).toBe(3)
+    expect(s.longest).toBe(3)
+  })
+
+  it('keeps the run alive on a day the child has not done anything YET', () => {
+    // Nothing approved today, but yesterday counts — the day is not over.
+    const s = streakFromActiveDays([today - 1, today - 2], today)
+    expect(s.current).toBe(2)
+  })
+
+  it('ends the run once a whole day was missed', () => {
+    const s = streakFromActiveDays([today - 2, today - 3, today - 4], today)
+    expect(s.current).toBe(0)
+    // …but the record it set is kept.
+    expect(s.longest).toBe(3)
+  })
+
+  it('only counts back to the gap, not across it', () => {
+    const s = streakFromActiveDays([today, today - 1, today - 3, today - 4, today - 5], today)
+    expect(s.current).toBe(2)
+    expect(s.longest).toBe(3)
+  })
+
+  it('does not require a full day of chores — one approved chore lights the day', () => {
+    // The rule this file exists to encode: any approved completion on a day
+    // makes that day count. Callers pass one day index per approved chore.
+    const s = streakFromActiveDays([day('2026-08-04T02:00:00Z')], today)
+    expect(s.current).toBe(1)
+  })
+})
+
+describe('currentStreakAsOf — the streak decays on read', () => {
+  const lastActive = new Date('2026-08-04T13:00:00Z') // 20:00 +07
+
+  it('shows the stored streak on the same local day', () => {
+    const now = new Date('2026-08-04T15:00:00Z')
+    expect(currentStreakAsOf({ current: 5, lastActiveDate: lastActive }, now, THAI_LOCAL_OFFSET_MS)).toBe(5)
+  })
+
+  it('still shows it the next day — the child has all day to keep it', () => {
+    const now = new Date('2026-08-05T15:00:00Z')
+    expect(currentStreakAsOf({ current: 5, lastActiveDate: lastActive }, now, THAI_LOCAL_OFFSET_MS)).toBe(5)
+  })
+
+  it('goes out once a whole day passed with nothing', () => {
+    const now = new Date('2026-08-06T15:00:00Z')
+    expect(currentStreakAsOf({ current: 5, lastActiveDate: lastActive }, now, THAI_LOCAL_OFFSET_MS)).toBe(0)
+  })
+
+  it('a row with a streak but no activity date reads as 0', () => {
+    const now = new Date('2026-08-06T15:00:00Z')
+    expect(currentStreakAsOf({ current: 5, lastActiveDate: null }, now, THAI_LOCAL_OFFSET_MS)).toBe(0)
   })
 })

@@ -95,7 +95,6 @@ export const POST = withHandler<Ctx>(async (req, { params }) => {
     const gamified = await applyGamification({
       userId: redemption.redeemedBy,
       xpDelta: 0,
-      completedDay: false,
       allChoresDoneBeforeNoon: false,
       clock: systemClock,
     })

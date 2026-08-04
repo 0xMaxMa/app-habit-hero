@@ -83,7 +83,7 @@ meant, **ask — never guess**. Every call carries the two auth headers from §1
 |------------------|------|-------|
 | "อนุมัติงาน…ของ[เด็ก]" / `/approve <id>` | `POST /api/completions/:id/approve` | Awards XP. Celebrate any deltas (§7). |
 | "ปฏิเสธงาน…" + reason / `/reject <id> <reason>` | `POST /api/completions/:id/reject` | Body `{ "feedback": "<reason>" }`. No XP. |
-| "ยกเลิกอนุมัติงาน…" / undo an approval | `POST /api/completions/:id/unapprove` | Claws the XP back, revokes badges that approval earned, returns the chore to the pending queue. The streak is NOT rewound — say so. |
+| "ยกเลิกอนุมัติงาน…" / undo an approval | `POST /api/completions/:id/unapprove` | Claws the XP back, revokes badges that approval earned, returns the chore to the pending queue. The streak is recomputed: if that was the child's only approved chore that day, the day stops counting. |
 | list pending work | `GET /api/completions?status=pending` | To find the completion `id` to approve/reject. |
 | "บวก [เด็ก] [N] XP [เหตุผล]" | `POST /api/bonus` | Body `{ "user", "amount", "reason" }`. Celebrate deltas (§7). |
 | "งานใหม่: [ชื่อ] [XP]" (quick chore) | `POST /api/chores` | Body per §5 quick-chore. |

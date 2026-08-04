@@ -29,6 +29,8 @@ import {
   type Actor,
 } from '@/lib/api'
 import { levelForXp, xpToNextLevel, rankName } from '@/lib/level'
+import { systemClock, THAI_LOCAL_OFFSET_MS } from '@/lib/clock'
+import { currentStreakAsOf } from '@/lib/streak'
 import { BADGES, badgeImagePath } from '@/lib/badges'
 
 export const dynamic = 'force-dynamic'
@@ -42,6 +44,7 @@ interface ProgressRow {
   totalXp: number
   currentStreak: number
   longestStreak: number
+  lastActiveDate: Date | null
 }
 
 /** Shape both the single-user and per-child summary responses share. */
@@ -53,7 +56,17 @@ function progressView(
   avatarUrl: string | null = null,
 ) {
   const xp = progress?.totalXp ?? 0
-  const streak = progress?.currentStreak ?? 0
+  // The stored streak is only rewritten when something is approved, so a child
+  // who stopped days ago would still show a lit flame. Apply the lapse rule at
+  // read time (lib/streak) — no extra query, the row already carries the date.
+  const streak = currentStreakAsOf(
+    {
+      current: progress?.currentStreak ?? 0,
+      lastActiveDate: progress?.lastActiveDate ?? null,
+    },
+    systemClock.now(),
+    THAI_LOCAL_OFFSET_MS,
+  )
   const bestStreak = progress?.longestStreak ?? 0
 
   // Badges come straight from the persisted UserBadge set (the real earned

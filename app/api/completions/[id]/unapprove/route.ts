@@ -10,10 +10,10 @@
  *   3. revoke any badge that this approval — and only this approval — was
  *      holding up, so re-approving celebrates it again.
  *
- * The daily streak is NOT rewound: an approval only nudges the streak when it
- * completes a whole day, and later days may have advanced it since, so there is
- * no sound single step to undo. The response says so via `streakUnchanged` and
- * the UI tells the parent plainly.
+ * The daily streak IS re-derived from the child's remaining approved
+ * completions: taking back their only approved chore of a day takes that day
+ * out of the streak, while undoing one of several leaves it alone. The response
+ * reports which happened via `streakUnchanged` so the UI can say it plainly.
  *
  * Family scope is enforced against the completion's chore (decision #3).
  */
@@ -79,7 +79,8 @@ export const POST = withHandler<{ params: { id: string } }>(async (req, { params
       reviewedAt: null,
     },
     ...undo,
-    // The streak is a daily engine; one approval is not a single step of it.
-    streakUnchanged: true,
+    // The streak is derived from approved completions, so it only moves when
+    // this was the child's last approved chore of that day. Reported, not assumed.
+    streakUnchanged: !undo.streak.changed,
   })
 })

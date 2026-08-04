@@ -18,7 +18,13 @@ import { THAI_LOCAL_OFFSET_MS } from '@/lib/clock'
 import { prisma } from '@/lib/db'
 import { addXp } from '@/lib/xp'
 import { levelForXp } from '@/lib/level'
-import { recordCompletion, type StreakState, type StreakMilestone } from '@/lib/streak'
+import {
+  localDayNumber,
+  milestoneReached,
+  streakFromActiveDays,
+  type DerivedStreak,
+  type StreakMilestone,
+} from '@/lib/streak'
 import {
   BADGES,
   classifyChore,
@@ -60,14 +66,48 @@ export interface GamifyOptions {
   userId: string
   /** XP to add to the user's running total (may be 0). */
   xpDelta: number
-  /**
-   * Whether this event completed all of the user's chores for the day — the
-   * trigger for advancing the daily streak (lib/streak).
-   */
-  completedDay: boolean
-  /** Did the user finish every one of today's chores before noon? (Speed Demon) */
+  /** Did the user finish every one of today's required chores before noon? (Speed Demon) */
   allChoresDoneBeforeNoon: boolean
   clock: Clock
+}
+
+/**
+ * Derive the child's streak from their approved completions: a day counts when
+ * at least one of their completions was approved on it (local Thai day).
+ *
+ * Read from history on every write rather than nudged one step at a time, so
+ * the number cannot drift — approving out of order, approving twice, or undoing
+ * an approval all land on the same answer.
+ *
+ * @param alsoCountCompletionId count this completion as approved even though the
+ *   row has already been flipped back — used by the undo path to reconstruct
+ *   the "before" streak.
+ */
+export async function deriveStreak(
+  userId: string,
+  clock: Clock,
+  alsoCountCompletionId?: string,
+): Promise<DerivedStreak & { lastActiveDate: Date | null }> {
+  const rows = await prisma.choreCompletion.findMany({
+    where: alsoCountCompletionId
+      ? { completedBy: userId, OR: [{ status: 'approved' }, { id: alsoCountCompletionId }] }
+      : { completedBy: userId, status: 'approved' },
+    select: { submittedAt: true },
+  })
+
+  const derived = streakFromActiveDays(
+    rows.map((r) => localDayNumber(r.submittedAt, THAI_LOCAL_OFFSET_MS)),
+    localDayNumber(clock.now(), THAI_LOCAL_OFFSET_MS),
+  )
+
+  // The exact instant of the newest activity, so reads can apply the lapse rule
+  // without going back to the completions table.
+  const lastActiveDate = rows.reduce<Date | null>(
+    (newest, r) => (newest === null || r.submittedAt > newest ? r.submittedAt : newest),
+    null,
+  )
+
+  return { ...derived, lastActiveDate }
 }
 
 /** Stable key so a DB Badge row can be matched back to a BADGES definition. */
@@ -182,7 +222,7 @@ async function computeBadgeStats(opts: {
  * deltas. Upserts UserProgress so a child without a progress row still works.
  */
 export async function applyGamification(opts: GamifyOptions): Promise<Gamification> {
-  const { userId, xpDelta, completedDay, allChoresDoneBeforeNoon, clock } = opts
+  const { userId, xpDelta, allChoresDoneBeforeNoon, clock } = opts
 
   const existing = await prisma.userProgress.findUnique({ where: { userId } })
   const previousTotal = existing?.totalXp ?? 0
@@ -192,14 +232,13 @@ export async function applyGamification(opts: GamifyOptions): Promise<Gamificati
   const newLevel = levelForXp(newTotal)
 
   // --- Streak ------------------------------------------------------------
-  const streakStateBefore: StreakState = {
-    current: existing?.currentStreak ?? 0,
-    longest: existing?.longestStreak ?? 0,
-    lastActiveDate: existing?.lastActiveDate ?? null,
-  }
-  const streakUpdate = completedDay
-    ? recordCompletion(streakStateBefore, clock)
-    : { state: streakStateBefore, incremented: false, reset: false, milestone: null as StreakMilestone | null }
+  // Re-derived from the completion history (see deriveStreak), so this runs on
+  // every XP event — a bonus or a redemption simply recomputes the same number.
+  const previousStreak = existing?.currentStreak ?? 0
+  const streak = await deriveStreak(userId, clock)
+  // `longest` is a high-water mark: never let a recompute lower a record the
+  // child already set (history predating this rule, or a seeded value).
+  const longestStreak = Math.max(existing?.longestStreak ?? 0, streak.longest)
 
   await prisma.userProgress.upsert({
     where: { userId },
@@ -207,16 +246,16 @@ export async function applyGamification(opts: GamifyOptions): Promise<Gamificati
       userId,
       totalXp: newTotal,
       currentLevel: newLevel,
-      currentStreak: streakUpdate.state.current,
-      longestStreak: streakUpdate.state.longest,
-      lastActiveDate: streakUpdate.state.lastActiveDate,
+      currentStreak: streak.current,
+      longestStreak,
+      lastActiveDate: streak.lastActiveDate,
     },
     update: {
       totalXp: newTotal,
       currentLevel: newLevel,
-      currentStreak: streakUpdate.state.current,
-      longestStreak: streakUpdate.state.longest,
-      lastActiveDate: streakUpdate.state.lastActiveDate,
+      currentStreak: streak.current,
+      longestStreak,
+      lastActiveDate: streak.lastActiveDate,
     },
   })
 
@@ -225,7 +264,7 @@ export async function applyGamification(opts: GamifyOptions): Promise<Gamificati
     userId,
     totalXp: newTotal,
     level: newLevel,
-    currentStreak: streakUpdate.state.current,
+    currentStreak: streak.current,
     allChoresDoneBeforeNoon,
     clock,
   })
@@ -275,11 +314,13 @@ export async function applyGamification(opts: GamifyOptions): Promise<Gamificati
       leveledUp: newLevel > previousLevel,
     },
     streak: {
-      current: streakUpdate.state.current,
-      longest: streakUpdate.state.longest,
-      incremented: streakUpdate.incremented,
-      reset: streakUpdate.reset,
-      milestone: streakUpdate.milestone,
+      current: streak.current,
+      longest: longestStreak,
+      // A derived streak reports what changed by comparing against the stored
+      // value rather than by knowing which branch it took.
+      incremented: streak.current > previousStreak,
+      reset: streak.current < previousStreak,
+      milestone: milestoneReached(previousStreak, streak.current),
     },
     newBadges,
   }
@@ -300,6 +341,8 @@ export interface UndoGamification {
   progress: UndoProgressDelta
   /** Badges taken back because this approval was the only thing earning them. */
   revokedBadges: BadgeAward[]
+  /** The streak after the undo, and whether dropping this approval moved it. */
+  streak: { current: number; changed: boolean }
 }
 
 export interface UndoOptions {
@@ -328,10 +371,12 @@ export interface UndoOptions {
  * would strip those historical badges off the child. Diffing isolates the
  * damage this one undo caused and leaves everything else untouched.
  *
- * The daily streak is intentionally NOT rewound: an approval only ever nudges
- * the streak when it completes the child's whole day, and later days may have
- * advanced it since — there is no sound way to undo one step of it. Callers
- * should say so rather than imply the streak was reverted.
+ * The daily streak IS recomputed here — it is derived from the completion
+ * history (see deriveStreak), so dropping this approval simply re-answers the
+ * same question. If it was the child's only approved chore that day, the day
+ * stops counting; otherwise nothing moves. The badge diff below deliberately
+ * holds the streak steady on both sides anyway, so an undo never claws back a
+ * streak medal the child had already earned.
  */
 export async function reverseGamification(opts: UndoOptions): Promise<UndoGamification> {
   const { userId, xpDelta, completionId, clock } = opts
@@ -339,17 +384,33 @@ export async function reverseGamification(opts: UndoOptions): Promise<UndoGamifi
   const existing = await prisma.userProgress.findUnique({ where: { userId } })
   const previousTotal = existing?.totalXp ?? 0
   const previousLevel = existing?.currentLevel ?? 1
-  const currentStreak = existing?.currentStreak ?? 0
 
   // Never let a clawback push a child below zero (XP is also spent on rewards,
   // so the running balance can already be lower than what this approval gave).
   const newTotal = Math.max(0, previousTotal - xpDelta)
   const newLevel = levelForXp(newTotal)
 
+  const streak = await deriveStreak(userId, clock)
+  const currentStreak = streak.current
+  const longestStreak = Math.max(existing?.longestStreak ?? 0, streak.longest)
+
   await prisma.userProgress.upsert({
     where: { userId },
-    create: { userId, totalXp: newTotal, currentLevel: newLevel },
-    update: { totalXp: newTotal, currentLevel: newLevel },
+    create: {
+      userId,
+      totalXp: newTotal,
+      currentLevel: newLevel,
+      currentStreak,
+      longestStreak,
+      lastActiveDate: streak.lastActiveDate,
+    },
+    update: {
+      totalXp: newTotal,
+      currentLevel: newLevel,
+      currentStreak,
+      longestStreak,
+      lastActiveDate: streak.lastActiveDate,
+    },
   })
 
   // --- Badge diff: earned before this undo, no longer earned after ---------
@@ -400,5 +461,6 @@ export async function reverseGamification(opts: UndoOptions): Promise<UndoGamifi
       leveledDown: newLevel < previousLevel,
     },
     revokedBadges,
+    streak: { current: currentStreak, changed: currentStreak !== (existing?.currentStreak ?? 0) },
   }
 }

@@ -14,6 +14,15 @@ import { badRequest, notFound } from './errors'
 
 /** Absolute directory photos are stored in. */
 function photoDir(): string {
+  // Tests MUST point PHOTO_DIR somewhere disposable. The default resolves to
+  // ./data/photos, which on a deployed host is the very directory the container
+  // bind-mounts — a test run there writes 1px fixtures straight into the
+  // family's real photos. Fail loudly instead of quietly polluting it.
+  if (process.env.NODE_ENV === 'test' && !process.env.PHOTO_DIR) {
+    throw new Error(
+      'PHOTO_DIR must be set when running tests — refusing to fall back to ./data/photos',
+    )
+  }
   return path.resolve(process.env.PHOTO_DIR || './data/photos')
 }
 

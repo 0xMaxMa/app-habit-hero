@@ -92,13 +92,16 @@ export const POST = withHandler<{ params: { id: string } }>(async (req, { params
     },
   })
 
-  // --- Did this finish the child's day? (drives streak + Speed Demon) ------
+  // --- Did this finish the child's day? (drives the Speed Demon badge) -----
+  // Bonus chores are opt-in extras, so a day is "finished" once every required
+  // chore is done. The streak no longer asks this question at all — it counts
+  // any day the child got something approved (lib/streak).
   const childId = completion.completedBy
   const remaining = await pendingTodayChores(completion.chore.familyId, childId, systemClock)
-  const completedDay = remaining.length === 0
+  const requiredRemaining = remaining.filter((c) => !c.isExtra)
 
   let allChoresDoneBeforeNoon = false
-  if (completedDay) {
+  if (requiredRemaining.length === 0) {
     const todaysApproved = await prisma.choreCompletion.findMany({
       where: {
         completedBy: childId,
@@ -117,7 +120,6 @@ export const POST = withHandler<{ params: { id: string } }>(async (req, { params
   const gamification = await applyGamification({
     userId: childId,
     xpDelta: xpAwarded,
-    completedDay,
     allChoresDoneBeforeNoon,
     clock: systemClock,
   })
