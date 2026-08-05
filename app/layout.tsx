@@ -1,3 +1,4 @@
+import type { Metadata, Viewport } from 'next'
 import { Mali, Nunito } from 'next/font/google'
 import './globals.css'
 
@@ -23,9 +24,26 @@ const nunito = Nunito({
   display: 'swap',
 })
 
-export const metadata = {
+/**
+ * The icons themselves come from Next's file conventions — app/icon.png,
+ * app/apple-icon.png and app/favicon.ico are picked up automatically, so no
+ * `icons` field is declared here. `appleWebApp.title` is the one thing Safari
+ * will not infer: without it an iOS Home Screen shortcut is labelled with the
+ * page <title> of whatever page happened to be open when it was added.
+ */
+export const metadata: Metadata = {
   title: 'HabitHero',
   description: 'A cozy habit and chore tracker for families',
+  applicationName: 'HabitHero',
+  appleWebApp: { title: 'HabitHero' },
+}
+
+export const viewport: Viewport = {
+  // Stated explicitly rather than relying on how Next merges a partial
+  // `viewport` export with its defaults — themeColor is the only new field.
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#FBF5E9',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
