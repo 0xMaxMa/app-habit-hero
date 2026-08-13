@@ -29,7 +29,9 @@ services:
       # ── env for whoever/whatever is installing this app ──────────────────
       # The three !generate keys get a fresh random value from the gateway at
       # install time — nobody is asked for them. NEXTAUTH_URL is a URL, not a
-      # secret, so it stays bare; see the "สำหรับ AI agent" section in README.md.
+      # secret; it uses the !default: marker so the install field is pre-filled
+      # with the value below yet stays editable. See the "สำหรับ AI agent"
+      # section in README.md.
       #
       # base64url, not base64: this value is embedded in DATABASE_URL above, so
       # it must not contain / + = .
@@ -37,8 +39,10 @@ services:
       - NEXTAUTH_SECRET=!generate:base64:32
       # http://localhost:3737 — correct for local, LAN IP, and a public https
       # domain forwarding to this port. Switching to an https URL only adds the
-      # Secure cookie flag, and costs http access; leave that for later.
-      - NEXTAUTH_URL
+      # Secure cookie flag, and costs http access; leave that for later. The
+      # !default: marker pre-fills this at install yet stays editable — requires
+      # a gateway with !default: support (claude-gateway#300).
+      - NEXTAUTH_URL=!default:http://localhost:3737
       # the app rejects agent calls without a matching x-agent-token; both
       # containers read it from the same generated .env
       - AGENT_API_TOKEN=!generate:base64:32

@@ -112,7 +112,7 @@ gh api repos/0xMaxMa/app-habit-hero/commits/main --jq .sha
 ติดตั้งแอปจาก https://github.com/0xMaxMa/app-habit-hero
 ```
 
-agent จะอ่าน [หัวข้อสำหรับ agent](#agent-install) แล้วส่ง `NEXTAUTH_URL` ไปตัวเดียว ที่เหลือ gateway สุ่มให้
+agent อ่าน [หัวข้อสำหรับ agent](#agent-install) ได้เลย — `NEXTAUTH_URL` มี default `http://localhost:3737` แล้ว (ประกาศ `!default:` ใน `app.yaml`) ช่องติดตั้งจึง pre-fill ให้ ไม่ต้องส่งเองก็ได้ ส่วนที่เหลือ gateway สุ่มให้
 ถ้ามันย้อนกลับมาถามค่า env แปลว่ายังไม่ได้อ่าน — ตอบไปว่าให้อ่านหัวข้อนั้นก่อน
 
 หรือยิง API ตรง:
@@ -131,6 +131,7 @@ curl -s -X POST http://localhost:10850/api/v1/apps/install \
 ```
 
 > อีก 3 ตัว (`DB_PASSWORD`, `NEXTAUTH_SECRET`, `AGENT_API_TOKEN`) ไม่ต้องส่ง — gateway สุ่มให้เอง
+> `NEXTAUTH_URL` ก็ไม่ต้องส่งแล้ว — มี default `http://localhost:3737` ผ่าน `!default:` (ส่งมาเองเพื่อ override ได้)
 > ถ้าส่งมาด้วย gateway จะใช้ค่าที่ส่งแทนการสุ่ม
 
 ### วิธีที่ 2 — ติดตั้งจากโฟลเดอร์บนเครื่อง
@@ -158,11 +159,12 @@ make -C tools/installs install
 | `DB_PASSWORD` | ✅ | ✅ `base64url:24` | รหัสผ่าน Postgres (แหล่งความจริงเดียว — `DATABASE_URL` ฝังค่านี้ จึงต้องเป็น base64url ที่ไม่มี `/ + =`) |
 | `DATABASE_URL` | ✅ | — | connection string เต็ม (gateway ประกอบให้จาก `DB_PASSWORD`) |
 | `NEXTAUTH_SECRET` | ✅ | ✅ `base64:32` | คีย์เซ็น session |
-| `NEXTAUTH_URL` | ✅ | — | ใส่ `http://localhost:3737` ได้เลย ใช้ได้ทุกแบบ (localhost / LAN IP / โดเมน https ที่ forward เข้ามา) เปลี่ยนเป็น `https://…` ก็ต่อเมื่อต้องการแฟล็ก `Secure` และยอมให้เข้าได้ทาง https เท่านั้น |
+| `NEXTAUTH_URL` | ✅ | — | มี default `http://localhost:3737` แล้ว (ประกาศ `!default:` ใน `app.yaml`) — ช่องติดตั้ง pre-fill ให้ ไม่ต้องกรอกก็ได้ แต่ override ได้ ใช้ได้ทุกแบบ (localhost / LAN IP / โดเมน https ที่ forward เข้ามา) เปลี่ยนเป็น `https://…` ก็ต่อเมื่อต้องการแฟล็ก `Secure` และยอมให้เข้าได้ทาง https เท่านั้น |
 | `AGENT_API_TOKEN` | ✅ | ✅ `base64:32` | โทเคนที่ agent ส่งมาเป็นเฮดเดอร์ `x-agent-token` — ทุกคำขอจาก agent ที่ไม่มีตัวนี้ถูกปฏิเสธ |
 | `PHOTO_DIR` | — | — | ที่เก็บรูปงาน+รูปโปรไฟล์ (ดีฟอลต์ `./data/photos`, ในคอนเทนเนอร์คือ `/data/photos` ที่ mount ไว้) |
 
 > คอลัมน์ "gateway สุ่มให้" = ประกาศ `!generate:` ไว้ใน [`app.yaml`](./app.yaml) แล้ว ผู้ติดตั้งไม่ต้องกรอก (ต้องใช้ gateway ≥ 1.5.2)
+> `NEXTAUTH_URL` ใช้ `!default:` (ค่า pre-fill แต่แก้ได้) — ต้องใช้ gateway ที่รองรับ `!default:` (claude-gateway#300)
 > ถ้าติดตั้งเองด้วยมือจาก `.env.example` ก็ต้องเติมค่าพวกนี้เอง
 
 > รูปทั้งหมดอยู่บน **volume ที่ mount ไว้** ไม่ใช่ในคอนเทนเนอร์ — build/reinstall ใหม่รูปไม่หาย
