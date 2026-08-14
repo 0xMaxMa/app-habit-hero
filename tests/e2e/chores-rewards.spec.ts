@@ -51,7 +51,7 @@ test.describe('Parent Chore CRUD (§3.2)', () => {
 
     await page.getByRole('button', { name: 'เพิ่มงาน' }).click()
 
-    const dialog = page.getByRole('dialog', { name: 'เพิ่มงานบ้าน' })
+    const dialog = page.getByRole('dialog', { name: 'สร้างงานใหม่' })
     await expect(dialog).toBeVisible()
 
     await dialog.getByLabel('ชื่องาน').fill(title)
@@ -61,10 +61,10 @@ test.describe('Parent Chore CRUD (§3.2)', () => {
     await expect(
       dialog.getByRole('button', { name: 'รายสัปดาห์' }),
     ).toHaveAttribute('aria-pressed', 'true')
-    await dialog.getByLabel('กำหนดเวลา (ไม่บังคับ)').fill('19:30')
+    await dialog.getByLabel('ครบกำหนด (ไม่บังคับ)').fill('19:30')
     await dialog.getByLabel('มอบหมายให้').selectOption({ label: 'น้องเอ' })
 
-    await dialog.getByRole('button', { name: 'บันทึก' }).click()
+    await dialog.getByRole('button', { name: 'บันทึกงาน' }).click()
 
     // Modal closes and the new chore shows up as a list row.
     await expect(dialog).toBeHidden()
@@ -81,10 +81,10 @@ test.describe('Parent Chore CRUD (§3.2)', () => {
     // Arrange: create a chore we solely own so the edit is deterministic.
     const title = unique('รดน้ำต้นไม้')
     await page.getByRole('button', { name: 'เพิ่มงาน' }).click()
-    const createDialog = page.getByRole('dialog', { name: 'เพิ่มงานบ้าน' })
+    const createDialog = page.getByRole('dialog', { name: 'สร้างงานใหม่' })
     await createDialog.getByLabel('ชื่องาน').fill(title)
     await createDialog.getByLabel('แต้ม XP').fill('20')
-    await createDialog.getByRole('button', { name: 'บันทึก' }).click()
+    await createDialog.getByRole('button', { name: 'บันทึกงาน' }).click()
     await expect(createDialog).toBeHidden()
 
     const row = page.getByRole('listitem').filter({ hasText: title })
@@ -98,7 +98,7 @@ test.describe('Parent Chore CRUD (§3.2)', () => {
     const xp = editDialog.getByLabel('แต้ม XP')
     await expect(xp).toHaveValue('20')
     await xp.fill('75')
-    await editDialog.getByRole('button', { name: 'บันทึก' }).click()
+    await editDialog.getByRole('button', { name: 'บันทึกงาน' }).click()
 
     // Assert: saved value reflected in the list row. Match the "<n>XP" badge
     // text (not a bare number) — the unique title carries a timestamp that can
@@ -112,20 +112,22 @@ test.describe('Parent Chore CRUD (§3.2)', () => {
     page,
   }) => {
     await page.getByRole('button', { name: 'เพิ่มงาน' }).click()
-    const dialog = page.getByRole('dialog', { name: 'เพิ่มงานบ้าน' })
+    const dialog = page.getByRole('dialog', { name: 'สร้างงานใหม่' })
     await expect(dialog).toBeVisible()
 
     // Case A — valid title but negative XP → XP error, modal stays open.
+    // ChoreFormModal validates against a 5–999 range rather than just the sign,
+    // so a negative value reports the range (XP_MIN–XP_MAX).
     await dialog.getByLabel('ชื่องาน').fill(unique('งานทดสอบ'))
     await dialog.getByLabel('แต้ม XP').fill('-5')
-    await dialog.getByRole('button', { name: 'บันทึก' }).click()
-    await expect(dialog.getByText('XP ต้องไม่ติดลบ')).toBeVisible()
+    await dialog.getByRole('button', { name: 'บันทึกงาน' }).click()
+    await expect(dialog.getByText('แต้มต้องอยู่ระหว่าง 5–999')).toBeVisible()
     await expect(dialog).toBeVisible() // not saved / not dismissed
 
     // Case B — empty title → title error, modal still open.
     await dialog.getByLabel('ชื่องาน').fill('')
     await dialog.getByLabel('แต้ม XP').fill('10')
-    await dialog.getByRole('button', { name: 'บันทึก' }).click()
+    await dialog.getByRole('button', { name: 'บันทึกงาน' }).click()
     await expect(dialog.getByText('กรุณาใส่ชื่องาน')).toBeVisible()
     await expect(dialog).toBeVisible()
   })
