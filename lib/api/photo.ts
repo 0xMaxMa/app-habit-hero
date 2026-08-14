@@ -8,9 +8,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { promises as fs } from 'node:fs'
+import { constants as fsConstants, promises as fs } from 'node:fs'
 import path from 'node:path'
-import { badRequest, notFound } from './errors'
+import { badRequest, notFound, storageUnavailable } from './errors'
 
 /** Absolute directory photos are stored in. */
 function photoDir(): string {
@@ -68,13 +68,66 @@ async function writeUpload(file: File): Promise<string> {
   }
 
   const dir = photoDir()
-  await fs.mkdir(dir, { recursive: true })
-
   const filename = `${randomUUID()}${safeExt(file.name || '')}`
   const buffer = Buffer.from(await file.arrayBuffer())
-  await fs.writeFile(path.join(dir, filename), buffer)
+
+  try {
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, filename), buffer)
+  } catch (err) {
+    // A failure here is the volume, not the upload. Left unwrapped it becomes a
+    // bare 500 "Internal server error" and the real cause never reaches anyone
+    // — which is exactly how an unwritable mount stayed hidden until a parent
+    // noticed photos silently failing to attach.
+    if (isVolumeFailure(err)) {
+      console.error(
+        `[photo] cannot write to PHOTO_DIR ${dir}: ${(err as NodeJS.ErrnoException).code}`,
+      )
+      throw storageUnavailable()
+    }
+    throw err
+  }
 
   return filename
+}
+
+/** errno values that mean "the volume is wrong", not "this request is wrong". */
+const VOLUME_ERRNOS = new Set([
+  'EACCES', // directory not writable by the container user
+  'EPERM',
+  'EROFS', // mounted read-only
+  'ENOSPC', // volume full
+  'EDQUOT',
+  'ENOENT', // mount point vanished (mkdir -p could not create it either)
+])
+
+function isVolumeFailure(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code
+  return typeof code === 'string' && VOLUME_ERRNOS.has(code)
+}
+
+/**
+ * Report whether uploads can actually be stored right now, for /api/health.
+ *
+ * Uses access(W_OK) rather than a probe write: the healthcheck runs every 30s
+ * and should not churn the family's photo directory. access() is often called
+ * unreliable for root — the kernel short-circuits it when CAP_DAC_OVERRIDE is
+ * held — but this container drops all capabilities, so the check is subject to
+ * the same permission bits as the real write and was verified to return EACCES
+ * on a directory the container cannot write.
+ */
+export async function photoDirStatus(): Promise<
+  { writable: true; dir: string } | { writable: false; dir: string; reason: string }
+> {
+  const dir = photoDir()
+  try {
+    await fs.mkdir(dir, { recursive: true })
+    await fs.access(dir, fsConstants.W_OK)
+    return { writable: true, dir }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? 'UNKNOWN'
+    return { writable: false, dir, reason: code }
+  }
 }
 
 /** Bytes returned by readPhoto for the serve route. */

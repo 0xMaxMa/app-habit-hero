@@ -1,6 +1,6 @@
 apiVersion: v1
 name: habit-hero
-version: 0.1.1
+version: 0.2.0
 description: Kids habit & chore tracker with an AI agent (channel-agnostic)
 author: Mona-lisa-jai-kere
 
@@ -47,6 +47,22 @@ services:
       # containers read it from the same generated .env
       - AGENT_API_TOKEN=!generate:base64:32
     volumes:
+      # OWNERSHIP CONTRACT — this directory must be writable by uid 0.
+      #
+      # The app container runs as root but the gateway gives it `cap_drop: ALL`,
+      # which removes CAP_DAC_OVERRIDE. Root therefore gets no free pass on file
+      # permissions: it must satisfy the mode bits like any other user.
+      #
+      # Docker creates a missing bind-mount target as root:root 755, so a normal
+      # install already satisfies this and needs nothing done by hand. What
+      # breaks it is restoring the directory from a backup as another user
+      # (`tar -x` as ubuntu leaves it ubuntu:ubuntu 755) — root then has r-x
+      # only, every upload fails with EACCES, and photos already stored keep
+      # serving fine, which makes it look like an app bug rather than a mount.
+      #
+      # Fix: `chown root:root <appdir>/data/photos` (the directory itself; the
+      # files inside can stay owned by anyone as long as they are readable).
+      # /api/health reports this, so the container goes unhealthy if it recurs.
       - ./data/photos:/data/photos
     depends_on: [db]
     healthcheck:
