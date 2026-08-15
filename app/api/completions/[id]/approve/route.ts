@@ -30,6 +30,7 @@ import { pendingTodayChores } from '@/lib/api/today'
 import { applyGamification } from '@/lib/api/gamification'
 import { prisma } from '@/lib/db'
 import { systemClock, THAI_LOCAL_OFFSET_MS } from '@/lib/clock'
+import { localDayNumber } from '@/lib/streak'
 import { xpForSubmission, deadlineForDueTime } from '@/lib/point-rules'
 
 export const dynamic = 'force-dynamic'
@@ -102,19 +103,26 @@ export const POST = withHandler<{ params: { id: string } }>(async (req, { params
 
   let allChoresDoneBeforeNoon = false
   if (requiredRemaining.length === 0) {
+    // "Today" and "noon" are both local (UTC+7). Reading them in UTC meant the
+    // day ran 07:00→07:00 and "before noon" actually meant before 19:00 local.
+    const today = localDayNumber(now, THAI_LOCAL_OFFSET_MS)
+    const dayStart = new Date(today * 86_400_000 - THAI_LOCAL_OFFSET_MS)
     const todaysApproved = await prisma.choreCompletion.findMany({
       where: {
         completedBy: childId,
         status: 'approved',
         submittedAt: {
-          gte: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())),
-          lt: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)),
+          gte: dayStart,
+          lt: new Date(dayStart.getTime() + 86_400_000),
         },
       },
       select: { submittedAt: true },
     })
     allChoresDoneBeforeNoon =
-      todaysApproved.length > 0 && todaysApproved.every((c) => c.submittedAt.getUTCHours() < 12)
+      todaysApproved.length > 0 &&
+      todaysApproved.every(
+        (c) => new Date(c.submittedAt.getTime() + THAI_LOCAL_OFFSET_MS).getUTCHours() < 12,
+      )
   }
 
   const gamification = await applyGamification({

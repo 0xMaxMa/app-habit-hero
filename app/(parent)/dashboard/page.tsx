@@ -8,10 +8,16 @@
  * never touches Postgres.
  *
  * Data:
- *   • GET /api/progress?scope=weekly      → one row per child (xp/level/streak)
- *   • GET /api/chores                     → definitions (assignee, due, category)
- *   • GET /api/completions                → today's activity + pending count
- *   • GET /api/chores/today?child=<id>    → per-child "งานยังไม่เสร็จวันนี้"
+ *   • GET /api/progress?scope=weekly        → one row per child (xp/level/streak)
+ *   • GET /api/chores                       → definitions (title, category, xp)
+ *   • GET /api/completions?status=pending   → the approval queue, counted directly
+ *   • GET /api/chores/today?child=<id>      → that child's whole day + counts
+ *
+ * Every number on this page comes from the server. The page used to re-derive
+ * "does this chore apply today" and "was it done today" in the browser, next to
+ * a server that already knew — the two drifted, and the drift is what put a 0 in
+ * "รออนุมัติ" while nine submissions sat in the queue. The only arithmetic left
+ * here is summing per-child totals.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -32,6 +38,15 @@ import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
 import { levelInfo } from '@/lib/level'
 import { CATEGORY_META, WEEKDAY_LABELS, type Chore } from '../chores/types'
+import {
+  buildTodayRows,
+  countCells,
+  remainingTotal,
+  type CellStatus,
+  type DayEntry,
+  type DaySummary,
+  type TodayRow as TableRow,
+} from './rows'
 
 // ---- API response shapes (subset the dashboard reads) ---------------------
 
@@ -49,39 +64,25 @@ interface WeeklyResponse {
   scope: 'weekly'
   children: WeeklyChild[]
 }
-interface CompletionRow {
-  id: string
-  status: 'pending' | 'approved' | 'rejected'
-  submittedAt: string
-  xpAwarded: number | null
-  chore: { id: string; title: string; xpValue: number }
-  child: { id: string; name: string; avatarUrl: string | null }
-}
-interface CompletionsResponse {
-  completions: CompletionRow[]
-}
 interface TodayResponse {
   child: string
-  chores: unknown[]
+  day: DayEntry[]
+  summary: DaySummary
 }
 
-/** One child's fully-resolved dashboard row. */
+/** One child's fully-resolved dashboard row. `day`/`summary` are null when that
+ *  child's request failed — the tiles then say "—" instead of a confident 0. */
 interface ChildRow extends WeeklyChild {
-  remainingToday: number
-  doneToday: number
+  day: DayEntry[] | null
+  summary: DaySummary | null
 }
 
-/** A row in the family "งานของวันนี้" table. */
-type RowStatus = 'done' | 'late' | 'pending' | 'rejected' | 'todo'
-interface TodayRow {
-  key: string
+/** A table row plus the chore presentation the server does not need to know. */
+interface TodayRow extends TableRow {
   title: string
   categoryEmoji: string
   repeat: string
-  assigneeName: string
-  assigneeAvatar: string | null
   xp: number
-  status: RowStatus
   due: string | null
 }
 
@@ -95,7 +96,7 @@ const RECUR_LABEL: Record<Chore['recurrence'], string> = {
   once: 'ครั้งเดียว',
 }
 
-const STATUS_META: Record<RowStatus, { label: string; cls: string }> = {
+const STATUS_META: Record<CellStatus, { label: string; cls: string }> = {
   done: { label: 'เสร็จ', cls: 'bg-success-100 text-success-500' },
   late: { label: 'สาย', cls: 'bg-xp-300/50 text-xp-700' },
   pending: { label: 'รอตรวจ', cls: 'bg-primary-100 text-primary-700' },
@@ -103,24 +104,11 @@ const STATUS_META: Record<RowStatus, { label: string; cls: string }> = {
   todo: { label: 'ค้าง', cls: 'bg-cream-300 text-ink-600' },
 }
 
-function startOfDayTs(d: Date): number {
-  const c = new Date(d)
-  c.setHours(0, 0, 0, 0)
-  return c.getTime()
-}
-function localWeekday(): number {
-  return new Date(Date.now() + 7 * 60 * 60 * 1000).getUTCDay()
-}
-function appliesToday(chore: Chore, weekday: number): boolean {
-  if (chore.recurrence === 'weekly' && chore.recurDays.length > 0) {
-    return chore.recurDays.includes(weekday)
-  }
-  return true
-}
-function isPaused(chore: Chore, now: number): boolean {
-  if (chore.activeUntil && new Date(chore.activeUntil).getTime() < now) return true
-  if (chore.activeFrom && new Date(chore.activeFrom).getTime() > now) return true
-  return false
+/** Human label for how often a chore repeats. */
+function repeatLabel(chore: Chore): string {
+  return chore.recurrence === 'weekly' && chore.recurDays.length > 0
+    ? chore.recurDays.map((d) => WEEKDAY_LABELS[d]).join(' ')
+    : RECUR_LABEL[chore.recurrence]
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +116,7 @@ function isPaused(chore: Chore, now: number): boolean {
 export default function DashboardPage() {
   const [rows, setRows] = useState<ChildRow[] | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
-  const [redemptionCount, setRedemptionCount] = useState(0)
+  const [redemptionCount, setRedemptionCount] = useState<number | null>(0)
   const [todayRows, setTodayRows] = useState<TodayRow[]>([])
   const [error, setError] = useState<string | null>(null)
   // Bumping this key re-runs the loader effect; `background` marks a silent
@@ -143,106 +131,61 @@ export default function DashboardPage() {
 
     async function load() {
       try {
-        const [weekly, chores, comps, pendingRedempt] = await Promise.all([
+        const [weekly, chores, pending, pendingRedempt] = await Promise.all([
           api.get<WeeklyResponse>('/api/progress?scope=weekly'),
           api.get<{ chores: Chore[] }>('/api/chores'),
-          api.get<CompletionsResponse>('/api/completions'),
-          // Pending reward-redemption count for the summary tile. Resilient: a
-          // failure here must not blank the whole dashboard.
+          // The approval queue itself — the same request /approvals makes, so
+          // the tile and the page it links to cannot disagree.
+          api.get<{ completions: unknown[] }>('/api/completions?status=pending'),
+          // Pending reward-redemption count. Resilient: a failure here must not
+          // blank the whole dashboard — but it resolves to null, not 0, so the
+          // tile can say "—" rather than claim the queue is empty.
           api
             .get<{ redemptions: unknown[] }>('/api/redemptions?status=pending')
-            .then((r) => r.redemptions.length)
-            .catch(() => 0),
+            .then((r): number | null => r.redemptions.length)
+            .catch(() => null),
         ])
 
-        // Fan out one today-list request per child for the remaining counts.
-        const todays = await Promise.all(
+        // Fan out one day request per child. Same deal: a failed child resolves
+        // to null and shows as "—" instead of silently reading as "all done".
+        const days = await Promise.all(
           weekly.children.map((c) =>
             api
               .get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(c.userId)}`)
-              .then((t) => t.chores.length)
-              .catch(() => 0),
+              .catch(() => null),
           ),
         )
         if (!alive) return
 
-        // ---- Family "งานของวันนี้" table + per-child done counts ----------
-        const todayStart = startOfDayTs(new Date())
-        const now = Date.now()
-        const weekday = localWeekday()
-        const todayComps = comps.completions.filter(
-          (c) => startOfDayTs(new Date(c.submittedAt)) === todayStart,
-        )
-        // Latest completion today per chore (newest wins for the row status).
-        const latestByChore = new Map<string, CompletionRow>()
-        for (const c of todayComps) {
-          const prev = latestByChore.get(c.chore.id)
-          if (!prev || new Date(c.submittedAt) > new Date(prev.submittedAt)) {
-            latestByChore.set(c.chore.id, c)
-          }
-        }
-        const doneByChild = new Map<string, number>()
-        for (const c of todayComps) {
-          if (c.status !== 'rejected') {
-            doneByChild.set(c.child.id, (doneByChild.get(c.child.id) ?? 0) + 1)
-          }
-        }
-        const childName = (id: string | null) =>
-          weekly.children.find((c) => c.userId === id)?.name ?? null
+        const childRows: ChildRow[] = weekly.children.map((c, i) => ({
+          ...c,
+          day: days[i]?.day ?? null,
+          summary: days[i]?.summary ?? null,
+        }))
 
-        const table: TodayRow[] = []
-        let pending = 0
-        for (const chore of chores.chores) {
-          const comp = latestByChore.get(chore.id)
-          const shows = comp != null || (appliesToday(chore, weekday) && !isPaused(chore, now))
-          if (!shows) continue
-          if (comp?.status === 'pending') pending++
+        // ---- Family "งานของวันนี้" table ---------------------------------
+        // One row per chore, one cell per child that owes it (./rows). A shared
+        // chore that only one of three kids did is no longer reported finished.
+        const choreById = new Map(chores.chores.map((c) => [c.id, c]))
+        const tableRows: TodayRow[] = buildTodayRows(childRows, chores.chores).flatMap((r) => {
+          const chore = choreById.get(r.choreId)
+          if (!chore) return []
+          return [
+            {
+              ...r,
+              title: chore.title,
+              categoryEmoji: CATEGORY_META[chore.category].emoji,
+              repeat: repeatLabel(chore),
+              xp: chore.xpValue,
+              due: chore.dueTime,
+            },
+          ]
+        })
 
-          let status: RowStatus
-          let assigneeName: string
-          let assigneeAvatar: string | null = null
-          if (comp) {
-            assigneeName = comp.child.name
-            assigneeAvatar = comp.child.avatarUrl
-            if (comp.status === 'approved') {
-              status = (comp.xpAwarded ?? chore.xpValue) < chore.xpValue ? 'late' : 'done'
-            } else {
-              status = comp.status === 'rejected' ? 'rejected' : 'pending'
-            }
-          } else {
-            status = 'todo'
-            assigneeName = childName(chore.assignedTo) ?? 'ทุกคน'
-          }
-          const daysLabel =
-            chore.recurrence === 'weekly' && chore.recurDays.length > 0
-              ? chore.recurDays.map((d) => WEEKDAY_LABELS[d]).join(' ')
-              : RECUR_LABEL[chore.recurrence]
-          table.push({
-            key: chore.id,
-            title: chore.title,
-            categoryEmoji: CATEGORY_META[chore.category].emoji,
-            repeat: daysLabel,
-            assigneeName,
-            assigneeAvatar,
-            xp: comp?.xpAwarded ?? chore.xpValue,
-            status,
-            due: chore.dueTime,
-          })
-        }
-        // Done rows first, then pending/todo; stable within each.
-        const order: Record<RowStatus, number> = { late: 0, done: 1, pending: 2, rejected: 3, todo: 4 }
-        table.sort((a, b) => order[a.status] - order[b.status])
-
-        setRows(
-          weekly.children.map((c, i) => ({
-            ...c,
-            remainingToday: todays[i],
-            doneToday: doneByChild.get(c.userId) ?? 0,
-          })),
-        )
-        setPendingCount(pending)
+        setRows(childRows)
+        setPendingCount(pending.completions.length)
         setRedemptionCount(pendingRedempt)
-        setTodayRows(table)
+        setTodayRows(tableRows)
         setError(null)
       } catch (err) {
         if (!alive || silent) return
@@ -265,9 +208,11 @@ export default function DashboardPage() {
     setReloadKey((k) => k + 1)
   })
 
-  const doneCount = todayRows.filter((r) => r.status === 'done' || r.status === 'late').length
-  const todoCount = todayRows.filter((r) => r.status === 'todo').length
-  const lateCount = todayRows.filter((r) => r.status === 'late').length
+  // Header counts are per child-task, the same unit as the "งานยังไม่เสร็จ" tile
+  // — a shared chore three kids owe counts three times in both places.
+  const counts = countCells(todayRows)
+  // A child whose day request failed contributes nothing rather than a fake 0.
+  const remaining = remainingTotal(rows ?? [])
 
   return (
     <div className="space-y-6">
@@ -290,7 +235,8 @@ export default function DashboardPage() {
         pendingCount={pendingCount}
         redemptionCount={redemptionCount}
         childCount={rows?.length ?? 0}
-        remainingTotal={rows ? rows.reduce((sum, r) => sum + r.remainingToday, 0) : 0}
+        remainingTotal={remaining.total}
+        remainingPartial={remaining.partial}
         loading={rows === null && error === null}
       />
 
@@ -332,48 +278,61 @@ export default function DashboardPage() {
       {rows !== null && todayRows.length > 0 && (
         <section aria-label="งานของวันนี้" className="space-y-3">
           <Card padding="none" className="overflow-hidden">
-            <div className="flex items-center justify-between border-b border-cream-400 px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-cream-400 px-5 py-4">
               <h2 className="text-lg font-extrabold text-ink-900">งานของวันนี้</h2>
+              {/* "ส่งแล้ว" rather than "รอตรวจ": this counts what was handed in
+                  *today*, while the รออนุมัติ tile counts the whole queue —
+                  yesterday's submissions included. Two near-synonyms on one
+                  screen meaning different scopes is how the page got confusing
+                  in the first place. */}
               <span className="text-sm font-bold text-ink-600">
-                เสร็จ {doneCount} · ค้าง {todoCount} · สาย {lateCount}
+                เสร็จ {counts.done} · ส่งแล้ว {counts.review} · ค้าง {counts.todo} · สาย{' '}
+                {counts.late}
               </span>
             </div>
             <ul>
-              {todayRows.map((r) => {
-                const st = STATUS_META[r.status]
-                return (
-                  <li
-                    key={r.key}
-                    className="flex items-center gap-3 border-b border-cream-300 px-5 py-3 last:border-0"
-                  >
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-cream-300 text-base">
-                      {r.categoryEmoji}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-extrabold text-ink-900">{r.title}</p>
-                      <p className="text-xs font-semibold text-ink-500">{r.repeat}</p>
-                    </div>
-                    <div className="hidden min-w-0 items-center gap-1.5 sm:flex">
-                      <Avatar src={r.assigneeAvatar} character="fox" name={r.assigneeName} size="sm" />
-                      <span className="truncate text-xs font-bold text-ink-700">{r.assigneeName}</span>
-                    </div>
-                    <span className="hidden w-16 text-right text-sm font-extrabold text-xp-700 sm:block">
-                      +{r.xp} XP
-                    </span>
-                    <span
-                      className={cn(
-                        'w-16 rounded-pill py-1 text-center text-xs font-extrabold',
-                        st.cls,
+              {todayRows.map((r) => (
+                <li
+                  key={r.choreId}
+                  className="flex items-center gap-3 border-b border-cream-300 px-5 py-3 last:border-0"
+                >
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-cream-300 text-base">
+                    {r.categoryEmoji}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="flex items-center gap-1.5 truncate text-sm font-extrabold text-ink-900">
+                      {r.title}
+                      {r.isExtra && (
+                        <span className="shrink-0 rounded-pill bg-xp-100 px-1.5 py-0.5 text-[10px] font-black text-xp-700">
+                          พิเศษ
+                        </span>
                       )}
-                    >
-                      {st.label}
-                    </span>
-                    <span className="hidden w-12 text-right text-xs font-bold text-ink-400 sm:block">
-                      {r.due ?? '—'}
-                    </span>
-                  </li>
-                )
-              })}
+                    </p>
+                    <p className="text-xs font-semibold text-ink-500">{r.repeat}</p>
+                  </div>
+                  {/* One chip per child who owes this chore — a shared chore that
+                      only one of three kids did no longer reads as finished. */}
+                  <div className="flex flex-wrap justify-end gap-1">
+                    {r.cells.map((c) => (
+                      <span
+                        key={c.childId}
+                        className={cn(
+                          'whitespace-nowrap rounded-pill px-2 py-1 text-[11px] font-extrabold',
+                          STATUS_META[c.status].cls,
+                        )}
+                      >
+                        {c.childName} · {STATUS_META[c.status].label}
+                      </span>
+                    ))}
+                  </div>
+                  <span className="hidden w-16 shrink-0 text-right text-sm font-extrabold text-xp-700 sm:block">
+                    +{r.xp} XP
+                  </span>
+                  <span className="hidden w-12 shrink-0 text-right text-xs font-bold text-ink-400 sm:block">
+                    {r.due ?? '—'}
+                  </span>
+                </li>
+              ))}
             </ul>
           </Card>
         </section>
@@ -404,12 +363,15 @@ function SummaryStrip({
   redemptionCount,
   childCount,
   remainingTotal,
+  remainingPartial,
   loading,
 }: {
   pendingCount: number
-  redemptionCount: number
+  /** null → the request failed; show "—" rather than an untrue 0. */
+  redemptionCount: number | null
   childCount: number
   remainingTotal: number
+  remainingPartial: boolean
   loading: boolean
 }) {
   return (
@@ -430,13 +392,19 @@ function SummaryStrip({
       <Link href="/approvals" className="block">
         <Card
           interactive
-          className={redemptionCount > 0 ? 'border-xp-500/40 bg-xp-100/50' : undefined}
+          className={redemptionCount ? 'border-xp-500/40 bg-xp-100/50' : undefined}
         >
           <StatBlock
             icon="🎁"
             label="คำขอแลกรางวัล"
-            value={loading ? '—' : String(redemptionCount)}
-            hint={redemptionCount > 0 ? 'แตะเพื่อตรวจคำขอ' : 'ไม่มีคำขอค้าง'}
+            value={loading || redemptionCount === null ? '—' : String(redemptionCount)}
+            hint={
+              redemptionCount === null
+                ? 'โหลดไม่สำเร็จ'
+                : redemptionCount > 0
+                  ? 'แตะเพื่อตรวจคำขอ'
+                  : 'ไม่มีคำขอค้าง'
+            }
           />
         </Card>
       </Link>
@@ -448,7 +416,7 @@ function SummaryStrip({
           icon="🧹"
           label="งานยังไม่เสร็จวันนี้"
           value={loading ? '—' : String(remainingTotal)}
-          hint="รวมทุกคน"
+          hint={remainingPartial ? 'บางคนโหลดไม่สำเร็จ' : 'ไม่รวมงานพิเศษ'}
         />
       </Card>
     </div>
@@ -485,7 +453,13 @@ function StatBlock({
 function ChildCard({ row, character }: { row: ChildRow; character: AvatarCharacter }) {
   const info = levelInfo(row.xp)
   const span = info.nextThreshold - info.currentThreshold
-  const totalToday = row.doneToday + row.remainingToday
+  // Both halves come from the same server count, so the fraction is in one unit:
+  // of the required chores on this child's day, how many are settled. It used to
+  // divide "submitted today" by "outstanding this period" — two different things.
+  const done = row.summary?.requiredDone ?? 0
+  const total = row.summary?.requiredTotal ?? 0
+  const remaining = row.summary?.requiredRemaining ?? 0
+  const extraDone = row.summary?.extraDone ?? 0
 
   return (
     <Card>
@@ -528,15 +502,21 @@ function ChildCard({ row, character }: { row: ChildRow; character: AvatarCharact
       <div className="mt-4 flex items-center justify-between border-t border-cream-500 pt-3">
         <p className="text-sm font-semibold text-ink-700">
           งานวันนี้{' '}
-          <span
-            className={cn(
-              'font-extrabold',
-              row.remainingToday > 0 ? 'text-ink-900' : 'text-success-500',
-            )}
-          >
-            {row.doneToday}/{totalToday}
-          </span>
-          {row.remainingToday === 0 && totalToday > 0 ? ' 🎉' : ''}
+          {row.summary === null ? (
+            <span className="font-extrabold text-ink-500">— โหลดไม่สำเร็จ</span>
+          ) : (
+            <>
+              <span
+                className={cn('font-extrabold', remaining > 0 ? 'text-ink-900' : 'text-success-500')}
+              >
+                {done}/{total}
+              </span>
+              {remaining === 0 && total > 0 ? ' 🎉' : ''}
+              {extraDone > 0 && (
+                <span className="ml-1 font-bold text-xp-700">+{extraDone} พิเศษ</span>
+              )}
+            </>
+          )}
         </p>
         <Link href={`/children/${row.userId}`}>
           <Button variant="ghost" size="sm">
