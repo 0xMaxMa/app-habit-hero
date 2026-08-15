@@ -174,6 +174,27 @@ async function repairPhotoDir(dir: string, reason: string): Promise<PhotoDirStat
   return { writable: true, dir, repaired: true }
 }
 
+/**
+ * Delete a stored upload by the app-relative URL `savePhoto` / `saveAvatar`
+ * returned. For undoing a write whose database row never landed: the file is
+ * on the volume, nothing references it, and no screen will ever show it.
+ *
+ * Never throws. It is called from a failure path, where the error worth
+ * reporting is the one that got us here — not a second one about cleanup.
+ */
+export async function discardPhoto(url: string): Promise<void> {
+  const filename = path.basename(url)
+  if (!filename || filename === '.' || filename === '..') return
+  try {
+    await fs.unlink(path.join(photoDir(), filename))
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    // Already gone is the outcome we wanted.
+    if (code === 'ENOENT') return
+    console.warn(`[photo] could not discard orphaned upload ${filename}: ${code}`)
+  }
+}
+
 /** Bytes returned by readPhoto for the serve route. */
 export interface StoredPhoto {
   data: Buffer

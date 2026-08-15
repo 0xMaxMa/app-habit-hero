@@ -20,11 +20,13 @@ import {
   resolveActor,
   assertFamily,
   badRequest,
+  conflict,
   forbidden,
   notFound,
   savePhoto,
+  discardPhoto,
 } from '@/lib/api'
-import { pendingTodayChores } from '@/lib/api/today'
+import { inCurrentPeriod, pendingTodayChores } from '@/lib/api/today'
 import { prisma } from '@/lib/db'
 import { systemClock } from '@/lib/clock'
 
@@ -101,6 +103,46 @@ export const POST = withHandler(async (req) => {
     throw forbidden('This chore is assigned to another child')
   }
 
+  // --- Already handed in for this period? ----------------------------------
+  // Without this a child could submit the same chore twice in a day and, once
+  // both were approved, collect the XP twice — while every list in the app
+  // insisted the chore was done. `inCurrentPeriod` is the same rule those lists
+  // use, so the two cannot drift apart again.
+  //
+  // Deliberately NOT a schedule check: the agent may still submit a chore that
+  // is out of its active window or on a weekday it does not recur on, so a
+  // parent can record work after the fact. `allow_duplicate` opts out of this
+  // one guard for the same reason — recording a second, genuinely separate run
+  // of the chore.
+  const now = systemClock.now()
+  const allowDuplicate = form.get('allow_duplicate') === 'true'
+  if (!allowDuplicate) {
+    const settled = await prisma.choreCompletion.findFirst({
+      where: {
+        choreId: chore.id,
+        completedBy: child.id,
+        status: { in: ['pending', 'approved'] },
+      },
+      select: { id: true, status: true, submittedAt: true },
+      orderBy: { submittedAt: 'desc' },
+    })
+    if (settled && inCurrentPeriod(chore, settled.submittedAt, now)) {
+      throw conflict(
+        settled.status === 'pending'
+          ? 'งานนี้ส่งไปแล้ว กำลังรอคุณพ่อคุณแม่ตรวจอยู่'
+          : 'งานนี้ทำเสร็จแล้วในรอบนี้',
+        {
+          // NOT `code` — respond.ts spreads extras over the envelope, and
+          // `error.code` must stay the ApiErrorCode the clients branch on.
+          reason: 'ALREADY_SUBMITTED',
+          completionId: settled.id,
+          completionStatus: settled.status,
+          recurrence: chore.recurrence,
+        },
+      )
+    }
+  }
+
   const photo = form.get('photo')
   const hasPhoto = photo instanceof File && photo.size > 0
   if (chore.requirePhoto && !hasPhoto) {
@@ -108,19 +150,28 @@ export const POST = withHandler(async (req) => {
   }
   const photoUrl = hasPhoto ? await savePhoto(photo) : null
 
-  const completion = await prisma.choreCompletion.create({
-    data: {
-      choreId: chore.id,
-      completedBy: child.id,
-      photoUrl,
-      submittedAt: systemClock.now(),
-      status: 'pending',
-    },
-    include: {
-      chore: true,
-      completer: { select: { id: true, name: true, avatarUrl: true } },
-    },
-  })
+  let completion
+  try {
+    completion = await prisma.choreCompletion.create({
+      data: {
+        choreId: chore.id,
+        completedBy: child.id,
+        photoUrl,
+        submittedAt: now,
+        status: 'pending',
+      },
+      include: {
+        chore: true,
+        completer: { select: { id: true, name: true, avatarUrl: true } },
+      },
+    })
+  } catch (err) {
+    // The photo is already on the volume at this point. Nothing will ever
+    // reference it now, so take it back out rather than leaving the family's
+    // storage to fill with files no screen can show.
+    if (photoUrl) await discardPhoto(photoUrl)
+    throw err
+  }
 
   return ok(
     {
