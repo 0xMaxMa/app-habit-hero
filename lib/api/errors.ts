@@ -16,6 +16,7 @@ export type ApiErrorCode =
   | 'CONFLICT'
   | 'UNLINKED'
   | 'SESSION_INVALID'
+  | 'STORAGE_UNAVAILABLE'
   | 'INTERNAL'
 
 export class ApiError extends Error {
@@ -76,4 +77,18 @@ export function conflict(
   extra?: Record<string, unknown>,
 ): ApiError {
   return new ApiError(409, 'CONFLICT', message, extra)
+}
+
+/**
+ * The photo volume could not be written — the host directory is not writable by
+ * the container, is full, or is mounted read-only. This is an operator problem,
+ * not a caller problem: the same request will fail again until someone fixes
+ * the mount, so it must not read as a generic glitch the child should retry
+ * forever. 503 (not 500) so it is visibly *unavailable* rather than broken.
+ */
+export function storageUnavailable(
+  message = 'บันทึกรูปไม่ได้ — พื้นที่จัดเก็บรูปเขียนไม่ได้ กรุณาแจ้งผู้ดูแล',
+  extra?: Record<string, unknown>,
+): ApiError {
+  return new ApiError(503, 'STORAGE_UNAVAILABLE', message, extra)
 }

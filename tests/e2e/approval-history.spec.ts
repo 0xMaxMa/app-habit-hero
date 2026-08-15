@@ -5,7 +5,7 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
  * (T12 · §3.4) and the HISTORY timeline (T13 · §3.4).
  *
  * Target pages (read for the real Thai copy the selectors below rely on):
- *   - app/(parent)/approvals/page.tsx  → /approvals  (h1 "อนุมัติงาน")
+ *   - app/(parent)/approvals/page.tsx  → /approvals  (h1 "อนุมัติ")
  *   - app/(parent)/history/page.tsx    → /history    (h1 "ประวัติงานบ้าน")
  *   - app/(parent)/ParentNav.tsx       (nav labels "อนุมัติ" / "ประวัติ")
  *   - components/ui/StatusChip.tsx     (approved→"เสร็จแล้ว", pending→"รออนุมัติ",
@@ -132,15 +132,25 @@ test.describe.serial('Approval + History (§3.4)', () => {
 
     await loginAsParent(page)
     await page.goto('/approvals')
-    await expect(page.getByRole('heading', { name: 'อนุมัติงาน' })).toBeVisible()
+    await expect(
+      page.getByRole('heading', { name: 'อนุมัติ', exact: true, level: 1 }),
+    ).toBeVisible()
 
     // Act on the newest ล้างรถ card (my row; the queue is submittedAt-asc so it
     // renders last). Clicking approve should drop exactly that card.
+    //
+    // The h1 above renders before the queue fetch resolves and `count()` does
+    // not auto-wait, so gate on the card itself first — otherwise this reads 0.
     const carCards = approvalCards(page).filter({ hasText: CHORE_CAR.title })
+    await expect(carCards.first()).toBeVisible()
     const countBefore = await carCards.count()
     expect(countBefore).toBeGreaterThan(0)
 
-    await carCards.last().getByRole('button', { name: 'อนุมัติ' }).click()
+    // Approving is two-step: "อนุมัติ" opens an XP/note panel on the card, and
+    // "ยืนยัน +<xp> XP" commits it.
+    const card = carCards.last()
+    await card.getByRole('button', { name: 'อนุมัติ' }).click()
+    await card.getByRole('button', { name: /^ยืนยัน \+\d+ XP$/ }).click()
 
     // DOM: one fewer pending ล้างรถ card + a success toast.
     await expect(carCards).toHaveCount(countBefore - 1)
@@ -166,9 +176,13 @@ test.describe.serial('Approval + History (§3.4)', () => {
 
     await loginAsParent(page)
     await page.goto('/approvals')
-    await expect(page.getByRole('heading', { name: 'อนุมัติงาน' })).toBeVisible()
+    await expect(
+      page.getByRole('heading', { name: 'อนุมัติ', exact: true, level: 1 }),
+    ).toBeVisible()
 
     const toyCards = approvalCards(page).filter({ hasText: CHORE_TOYS.title })
+    // Same as W-APPR-1: wait for the queue to render before the non-waiting count().
+    await expect(toyCards.first()).toBeVisible()
     const countBefore = await toyCards.count()
     expect(countBefore).toBeGreaterThan(0)
 

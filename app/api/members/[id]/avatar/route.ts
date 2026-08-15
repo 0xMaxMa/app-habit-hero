@@ -20,6 +20,7 @@ import {
   notFound,
   badRequest,
   saveAvatar,
+  discardPhoto,
 } from '@/lib/api'
 
 export const dynamic = 'force-dynamic'
@@ -89,11 +90,19 @@ export const POST = withHandler<{ params: { id: string } }>(async (req, { params
   }
 
   const avatarUrl = await saveAvatar(file)
-  const updated = await prisma.user.update({
-    where: { id: target.id },
-    data: { avatarUrl },
-    select: memberSelect,
-  })
+  let updated
+  try {
+    updated = await prisma.user.update({
+      where: { id: target.id },
+      data: { avatarUrl },
+      select: memberSelect,
+    })
+  } catch (err) {
+    // The image is already on the volume but no row points at it — take it back
+    // out instead of leaving an unreachable file behind.
+    await discardPhoto(avatarUrl)
+    throw err
+  }
 
   return ok({ member: toMemberDto(updated, actor.userId) })
 })

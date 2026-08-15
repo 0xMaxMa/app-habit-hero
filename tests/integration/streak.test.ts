@@ -22,7 +22,7 @@ import { AGENT_TOKEN, agentHeaders, jsonBody } from './helpers/actor'
 import { IDS } from '@/prisma/seed.test'
 import { pendingTodayChores } from '@/lib/api/today'
 import { THAI_LOCAL_OFFSET_MS } from '@/lib/clock'
-import { localDayNumber, weekNumber, dayNumber } from '@/lib/streak'
+import { localDayNumber, localWeekNumber } from '@/lib/streak'
 
 const DAY_MS = 86_400_000
 
@@ -190,8 +190,12 @@ describe('A-STREAK-3 — a weekly chore is done for the week, not just the day',
     // assumed, so a change to the week boundary fails loudly here.
     const now = new Date('2026-08-08T10:00:00Z')
     const earlier = new Date('2026-08-06T10:00:00Z')
-    expect(weekNumber(earlier)).toBe(weekNumber(now))
-    expect(dayNumber(earlier)).toBeLessThan(dayNumber(now))
+    expect(localWeekNumber(earlier, THAI_LOCAL_OFFSET_MS)).toBe(
+      localWeekNumber(now, THAI_LOCAL_OFFSET_MS),
+    )
+    expect(localDayNumber(earlier, THAI_LOCAL_OFFSET_MS)).toBeLessThan(
+      localDayNumber(now, THAI_LOCAL_OFFSET_MS),
+    )
 
     const weekly = await prisma.chore.create({
       data: {

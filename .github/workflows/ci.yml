@@ -51,6 +51,10 @@ jobs:
       AGENT_API_TOKEN: test-agent-token
       NEXTAUTH_SECRET: test-secret-please-change
       NEXTAUTH_URL: http://localhost:4000
+      # .env.test is gitignored, so nothing sets PHOTO_DIR here — and
+      # lib/api/photo.ts hard-fails under NODE_ENV=test rather than silently
+      # falling back to ./data/photos (the real bind mount on a deployed host).
+      PHOTO_DIR: ./.tmp/test-photos
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -87,6 +91,9 @@ jobs:
       AGENT_API_TOKEN: test-agent-token
       NEXTAUTH_SECRET: test-secret-please-change
       NEXTAUTH_URL: http://localhost:4000
+      # Keep uploads (and the /api/health writability probe) out of ./data/photos.
+      # Playwright's webServer inherits process.env, so `next start` sees this too.
+      PHOTO_DIR: ./.tmp/test-photos
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

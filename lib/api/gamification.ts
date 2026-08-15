@@ -16,6 +16,8 @@
 import type { Clock } from '@/lib/clock'
 import { THAI_LOCAL_OFFSET_MS } from '@/lib/clock'
 import { prisma } from '@/lib/db'
+import { serializable, type Db } from '@/lib/api/tx'
+import { periodStart } from '@/lib/period'
 import { addXp } from '@/lib/xp'
 import { levelForXp } from '@/lib/level'
 import {
@@ -82,13 +84,16 @@ export interface GamifyOptions {
  * @param alsoCountCompletionId count this completion as approved even though the
  *   row has already been flipped back — used by the undo path to reconstruct
  *   the "before" streak.
+ * @param db read through this transaction when the caller has one, so the
+ *   streak is derived from the same snapshot the XP total is written against.
  */
 export async function deriveStreak(
   userId: string,
   clock: Clock,
   alsoCountCompletionId?: string,
+  db: Db = prisma,
 ): Promise<DerivedStreak & { lastActiveDate: Date | null }> {
-  const rows = await prisma.choreCompletion.findMany({
+  const rows = await db.choreCompletion.findMany({
     where: alsoCountCompletionId
       ? { completedBy: userId, OR: [{ status: 'approved' }, { id: alsoCountCompletionId }] }
       : { completedBy: userId, status: 'approved' },
@@ -136,6 +141,8 @@ async function computeBadgeStats(opts: {
    * back to pending.
    */
   alsoCountCompletionId?: string
+  /** Read through the caller's transaction when there is one. */
+  db?: Db
 }): Promise<BadgeStats> {
   const {
     userId,
@@ -145,13 +152,14 @@ async function computeBadgeStats(opts: {
     allChoresDoneBeforeNoon,
     clock,
     alsoCountCompletionId,
+    db = prisma,
   } = opts
 
   // One pass over the child's approved completions feeds three stats: the
   // Extra-Chore count, per-category counts (title-inferred), and the number of
   // distinct early-morning days. The caller has already written the completion's
   // new status, so the row under review is counted (approve) / skipped (undo).
-  const approved = await prisma.choreCompletion.findMany({
+  const approved = await db.choreCompletion.findMany({
     where: alsoCountCompletionId
       ? { completedBy: userId, OR: [{ status: 'approved' }, { id: alsoCountCompletionId }] }
       : { completedBy: userId, status: 'approved' },
@@ -160,20 +168,14 @@ async function computeBadgeStats(opts: {
 
   // Approved reward redemptions — feeds the "แลกรางวัลครั้งแรก" badge and gates
   // the "นักออม" (saver) badge (earned only while this count is still 0).
-  const redemptionsCount = await prisma.rewardRedemption.count({
+  const redemptionsCount = await db.rewardRedemption.count({
     where: { redeemedBy: userId, status: 'approved' },
   })
 
-  // Start of the current week (Monday 00:00 Thai local), expressed as a real
-  // UTC timestamp, for the "ครบเครื่อง" (all 3 categories this week) badge.
-  const localNow = new Date(clock.now().getTime() + THAI_LOCAL_OFFSET_MS)
-  const daysFromMonday = (localNow.getUTCDay() + 6) % 7 // 0 = Monday
-  const weekStartMs =
-    Date.UTC(
-      localNow.getUTCFullYear(),
-      localNow.getUTCMonth(),
-      localNow.getUTCDate() - daysFromMonday,
-    ) - THAI_LOCAL_OFFSET_MS
+  // Start of the current week (Monday 00:00 Thai local), for the "ครบเครื่อง"
+  // (all 3 categories this week) badge — the same boundary reward limits and
+  // localWeekNumber use, rather than a fourth hand-rolled copy of it.
+  const weekStartMs = periodStart(clock.now(), 'week', THAI_LOCAL_OFFSET_MS).getTime()
 
   let extraChoresCompleted = 0
   const categoryCounts: Record<ChoreCategory, number> = { cleaning: 0, reading: 0, cooking: 0 }
@@ -220,110 +222,121 @@ async function computeBadgeStats(opts: {
 /**
  * Persist an XP change for `userId` and return the resulting gamification
  * deltas. Upserts UserProgress so a child without a progress row still works.
+ *
+ * The whole thing runs in one serializable transaction ({@link serializable}).
+ * The XP total is read, added to, and written back, so two approvals landing at
+ * the same instant would otherwise both read the same "before" value and the
+ * second would erase the first — the child losing XP the app had already told
+ * them they earned. Serializing also means the badge re-evaluation sees the
+ * same snapshot the total is written from, instead of a state somewhere between
+ * the two writes.
  */
 export async function applyGamification(opts: GamifyOptions): Promise<Gamification> {
   const { userId, xpDelta, allChoresDoneBeforeNoon, clock } = opts
 
-  const existing = await prisma.userProgress.findUnique({ where: { userId } })
-  const previousTotal = existing?.totalXp ?? 0
-  const previousLevel = existing?.currentLevel ?? 1
+  return serializable(async (tx) => {
+    const existing = await tx.userProgress.findUnique({ where: { userId } })
+    const previousTotal = existing?.totalXp ?? 0
+    const previousLevel = existing?.currentLevel ?? 1
 
-  const newTotal = addXp(previousTotal, xpDelta)
-  const newLevel = levelForXp(newTotal)
+    const newTotal = addXp(previousTotal, xpDelta)
+    const newLevel = levelForXp(newTotal)
 
-  // --- Streak ------------------------------------------------------------
-  // Re-derived from the completion history (see deriveStreak), so this runs on
-  // every XP event — a bonus or a redemption simply recomputes the same number.
-  const previousStreak = existing?.currentStreak ?? 0
-  const streak = await deriveStreak(userId, clock)
-  // `longest` is a high-water mark: never let a recompute lower a record the
-  // child already set (history predating this rule, or a seeded value).
-  const longestStreak = Math.max(existing?.longestStreak ?? 0, streak.longest)
+    // --- Streak ------------------------------------------------------------
+    // Re-derived from the completion history (see deriveStreak), so this runs on
+    // every XP event — a bonus or a redemption simply recomputes the same number.
+    const previousStreak = existing?.currentStreak ?? 0
+    const streak = await deriveStreak(userId, clock, undefined, tx)
+    // `longest` is a high-water mark: never let a recompute lower a record the
+    // child already set (history predating this rule, or a seeded value).
+    const longestStreak = Math.max(existing?.longestStreak ?? 0, streak.longest)
 
-  await prisma.userProgress.upsert({
-    where: { userId },
-    create: {
+    await tx.userProgress.upsert({
+      where: { userId },
+      create: {
+        userId,
+        totalXp: newTotal,
+        currentLevel: newLevel,
+        currentStreak: streak.current,
+        longestStreak,
+        lastActiveDate: streak.lastActiveDate,
+      },
+      update: {
+        totalXp: newTotal,
+        currentLevel: newLevel,
+        currentStreak: streak.current,
+        longestStreak,
+        lastActiveDate: streak.lastActiveDate,
+      },
+    })
+
+    // --- Badges ------------------------------------------------------------
+    const stats = await computeBadgeStats({
       userId,
       totalXp: newTotal,
-      currentLevel: newLevel,
-      currentStreak: streak.current,
-      longestStreak,
-      lastActiveDate: streak.lastActiveDate,
-    },
-    update: {
-      totalXp: newTotal,
-      currentLevel: newLevel,
-      currentStreak: streak.current,
-      longestStreak,
-      lastActiveDate: streak.lastActiveDate,
-    },
-  })
-
-  // --- Badges ------------------------------------------------------------
-  const stats = await computeBadgeStats({
-    userId,
-    totalXp: newTotal,
-    level: newLevel,
-    currentStreak: streak.current,
-    allChoresDoneBeforeNoon,
-    clock,
-  })
-
-  // Map DB Badge rows both ways so we know what the user already has and which
-  // row to write a UserBadge against.
-  const badgeRows = await prisma.badge.findMany()
-  const rowByKey = new Map(badgeRows.map((b) => [badgeKey(b.conditionType, b.conditionValue), b]))
-
-  const owned = await prisma.userBadge.findMany({
-    where: { userId },
-    include: { badge: true },
-  })
-  const alreadyEarned = owned
-    .map((ub) => {
-      const def = BADGES.find(
-        (b) => badgeKey(b.conditionType, b.conditionValue) === badgeKey(ub.badge.conditionType, ub.badge.conditionValue),
-      )
-      return def?.id
-    })
-    .filter((id): id is BadgeId => Boolean(id))
-
-  const newlyIds = newlyEarnedBadges(stats, alreadyEarned)
-
-  const newBadges: BadgeAward[] = []
-  for (const id of newlyIds) {
-    const def = BADGES.find((b) => b.id === id)
-    if (!def) continue
-    newBadges.push({ id: def.id, name: def.name, emoji: def.emoji })
-    // Persist only when a matching Badge row is seeded; otherwise the delta is
-    // still returned so the agent can celebrate.
-    const row = rowByKey.get(badgeKey(def.conditionType, def.conditionValue))
-    if (row) {
-      await prisma.userBadge.upsert({
-        where: { userId_badgeId: { userId, badgeId: row.id } },
-        create: { userId, badgeId: row.id },
-        update: {},
-      })
-    }
-  }
-
-  return {
-    progress: {
-      totalXp: newTotal,
       level: newLevel,
-      previousLevel,
-      leveledUp: newLevel > previousLevel,
-    },
-    streak: {
-      current: streak.current,
-      longest: longestStreak,
-      // A derived streak reports what changed by comparing against the stored
-      // value rather than by knowing which branch it took.
-      incremented: streak.current > previousStreak,
-      reset: streak.current < previousStreak,
-      milestone: milestoneReached(previousStreak, streak.current),
-    },
-    newBadges,
-  }
+      currentStreak: streak.current,
+      allChoresDoneBeforeNoon,
+      clock,
+      db: tx,
+    })
+
+    // Map DB Badge rows both ways so we know what the user already has and which
+    // row to write a UserBadge against.
+    const badgeRows = await tx.badge.findMany()
+    const rowByKey = new Map(badgeRows.map((b) => [badgeKey(b.conditionType, b.conditionValue), b]))
+
+    const owned = await tx.userBadge.findMany({
+      where: { userId },
+      include: { badge: true },
+    })
+    const alreadyEarned = owned
+      .map((ub) => {
+        const def = BADGES.find(
+          (b) => badgeKey(b.conditionType, b.conditionValue) === badgeKey(ub.badge.conditionType, ub.badge.conditionValue),
+        )
+        return def?.id
+      })
+      .filter((id): id is BadgeId => Boolean(id))
+
+    const newlyIds = newlyEarnedBadges(stats, alreadyEarned)
+
+    const newBadges: BadgeAward[] = []
+    for (const id of newlyIds) {
+      const def = BADGES.find((b) => b.id === id)
+      if (!def) continue
+      newBadges.push({ id: def.id, name: def.name, emoji: def.emoji })
+      // Persist only when a matching Badge row is seeded; otherwise the delta is
+      // still returned so the agent can celebrate.
+      const row = rowByKey.get(badgeKey(def.conditionType, def.conditionValue))
+      if (row) {
+        await tx.userBadge.upsert({
+          where: { userId_badgeId: { userId, badgeId: row.id } },
+          create: { userId, badgeId: row.id },
+          update: {},
+        })
+      }
+    }
+
+    return {
+      progress: {
+        totalXp: newTotal,
+        level: newLevel,
+        previousLevel,
+        leveledUp: newLevel > previousLevel,
+      },
+      streak: {
+        current: streak.current,
+        longest: longestStreak,
+        // A derived streak reports what changed by comparing against the stored
+        // value rather than by knowing which branch it took.
+        incremented: streak.current > previousStreak,
+        reset: streak.current < previousStreak,
+        milestone: milestoneReached(previousStreak, streak.current),
+      },
+      newBadges,
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +394,18 @@ export interface UndoOptions {
 export async function reverseGamification(opts: UndoOptions): Promise<UndoGamification> {
   const { userId, xpDelta, completionId, clock } = opts
 
-  const existing = await prisma.userProgress.findUnique({ where: { userId } })
+  return serializable(async (tx) => reverseInTx(tx, userId, xpDelta, completionId, clock))
+}
+
+/** The body of {@link reverseGamification}, bound to one transaction. */
+async function reverseInTx(
+  tx: Db,
+  userId: string,
+  xpDelta: number,
+  completionId: string,
+  clock: Clock,
+): Promise<UndoGamification> {
+  const existing = await tx.userProgress.findUnique({ where: { userId } })
   const previousTotal = existing?.totalXp ?? 0
   const previousLevel = existing?.currentLevel ?? 1
 
@@ -390,11 +414,11 @@ export async function reverseGamification(opts: UndoOptions): Promise<UndoGamifi
   const newTotal = Math.max(0, previousTotal - xpDelta)
   const newLevel = levelForXp(newTotal)
 
-  const streak = await deriveStreak(userId, clock)
+  const streak = await deriveStreak(userId, clock, undefined, tx)
   const currentStreak = streak.current
   const longestStreak = Math.max(existing?.longestStreak ?? 0, streak.longest)
 
-  await prisma.userProgress.upsert({
+  await tx.userProgress.upsert({
     where: { userId },
     create: {
       userId,
@@ -425,6 +449,7 @@ export async function reverseGamification(opts: UndoOptions): Promise<UndoGamifi
     allChoresDoneBeforeNoon: false,
     clock,
     alsoCountCompletionId: completionId,
+    db: tx,
   })
   const statsAfter = await computeBadgeStats({
     userId,
@@ -433,6 +458,7 @@ export async function reverseGamification(opts: UndoOptions): Promise<UndoGamifi
     currentStreak,
     allChoresDoneBeforeNoon: false,
     clock,
+    db: tx,
   })
 
   const invalidated = BADGES.filter(
@@ -441,12 +467,12 @@ export async function reverseGamification(opts: UndoOptions): Promise<UndoGamifi
 
   const revokedBadges: BadgeAward[] = []
   if (invalidated.length > 0) {
-    const owned = await prisma.userBadge.findMany({ where: { userId }, include: { badge: true } })
+    const owned = await tx.userBadge.findMany({ where: { userId }, include: { badge: true } })
     for (const def of invalidated) {
       const key = badgeKey(def.conditionType, def.conditionValue)
       const held = owned.find((ub) => badgeKey(ub.badge.conditionType, ub.badge.conditionValue) === key)
       if (!held) continue
-      await prisma.userBadge.delete({
+      await tx.userBadge.delete({
         where: { userId_badgeId: { userId, badgeId: held.badgeId } },
       })
       revokedBadges.push({ id: def.id, name: def.name, emoji: def.emoji })

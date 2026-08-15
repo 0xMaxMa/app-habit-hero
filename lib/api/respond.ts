@@ -55,7 +55,10 @@ export function toErrorResponse(err: unknown): NextResponse<ApiFailure> {
   if (err instanceof ZodError) {
     return fail('BAD_REQUEST', 'Invalid request', 400, { issues: err.issues })
   }
-  // Unexpected — do not leak internals to the caller.
+  // Unexpected — do not leak internals to the caller, but do not throw them
+  // away either. Silently swallowing these is how an unwritable photo volume
+  // produced a bare 500 with nothing in `docker logs` to explain it.
+  console.error('[api] unhandled error:', err)
   return fail('INTERNAL', 'Internal server error', 500)
 }
 

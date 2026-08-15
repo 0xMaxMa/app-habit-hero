@@ -1,6 +1,6 @@
 apiVersion: v1
 name: habit-hero
-version: 0.1.1
+version: 0.2.0
 description: Kids habit & chore tracker with an AI agent (channel-agnostic)
 author: Mona-lisa-jai-kere
 
@@ -10,6 +10,11 @@ services:
     resources:
       cpu: 0.5
       memory: 256M
+    # CHOWN only — everything else stays dropped by the gateway's cap_drop: ALL.
+    # It exists so the app can take ownership of ./data/photos when it finds it
+    # unwritable; see the OWNERSHIP CONTRACT on that volume below for why that
+    # is needed rather than a one-off chown by hand.
+    cap_add: [CHOWN]
     ports:
       # type: api → the gateway maps a direct host port (no subpath proxy), so
       # the app is served at the root path (no Next.js basePath) and the bare
@@ -47,6 +52,26 @@ services:
       # containers read it from the same generated .env
       - AGENT_API_TOKEN=!generate:base64:32
     volumes:
+      # OWNERSHIP CONTRACT — this directory must be writable by the app's uid.
+      #
+      # The app container runs as root, but `cap_drop: ALL` removes
+      # CAP_DAC_OVERRIDE, so root gets no free pass on file permissions: it must
+      # satisfy the mode bits like any other user. A fresh install is fine —
+      # docker creates a missing bind-mount target as root:root 755.
+      #
+      # What breaks it is a restore. `claude-gateway app restore` replays the
+      # backup's ownership verbatim (root helper container, `tar xzf` including
+      # the archive's `./` entry), so a backup captured while this directory was
+      # owned by the host user hands it back that way every single time. Root is
+      # then left with r-x: uploads fail with EACCES while already-stored photos
+      # keep serving, which reads as an app bug rather than a mount problem.
+      #
+      # A one-off `chown root:root` does not survive the next restore, so the
+      # app repairs the directory itself (lib/api/photo.ts → ensurePhotoDir),
+      # which is what `cap_add: [CHOWN]` above is for. Remove that capability
+      # and nothing is unsafe — the app just stops being able to recover, and
+      # /api/health reports the directory unwritable so the container goes
+      # unhealthy instead of failing silently.
       - ./data/photos:/data/photos
     depends_on: [db]
     healthcheck:

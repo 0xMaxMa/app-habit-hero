@@ -21,13 +21,7 @@ import { test, expect } from '@playwright/test'
 const PARENT = { email: 'parent@test.local', password: 'test1234' }
 const CHILD_A = { name: 'น้องเอ' }
 
-/**
- * NOTE (seed gap): prisma/seed.test.ts does NOT currently set a `pinHash` for
- * any child, and app/pin/page.tsx only lists children with `pinHash != null`.
- * Until the fixture seeds น้องเอ's PIN, the /pin picker renders empty and
- * W-AUTH-3 cannot pass. This constant is the PIN the seed is expected to set;
- * update both here and in seed.test.ts together.
- */
+/** Matches prisma/seed.test.ts → CHILD_TEST_PIN; update both together. */
 const CHILD_A_PIN = '1234'
 
 // ---------------------------------------------------------------------------
@@ -50,9 +44,15 @@ test.describe('AUTH', () => {
     ).toBeVisible()
 
     // Logout via ParentNav (visible at Desktop Chrome's md+ width) → back to /login.
+    // components/LogoutButton.tsx asks for confirmation first, and the confirm
+    // button carries the same label as the trigger — so scope it to the dialog.
     const logout = page.getByRole('button', { name: 'ออกจากระบบ' })
     await expect(logout).toBeVisible()
     await logout.click()
+
+    const confirm = page.getByRole('dialog', { name: 'ออกจากระบบ?' })
+    await expect(confirm).toBeVisible()
+    await confirm.getByRole('button', { name: 'ออกจากระบบ' }).click()
 
     await page.waitForURL('**/login')
     await expect(page.getByLabel('อีเมล')).toBeVisible()
@@ -72,10 +72,6 @@ test.describe('AUTH', () => {
 
   // W-AUTH-3: child signs in via PIN, reaches /child, and is blocked from the
   // parent-only /dashboard.
-  //
-  // BLOCKED until seed.test.ts sets a child pinHash (see CHILD_A_PIN note above);
-  // with the current fixture the /pin picker is empty and the child-select step
-  // below will time out. The flow itself matches the real UI.
   test('W-AUTH-3 child signs in via PIN and is blocked from /dashboard', async ({
     page,
   }) => {
@@ -117,6 +113,11 @@ test.describe('HEALTH', () => {
     await expect(res).toBeOK()
 
     const body = await res.json()
-    expect(body).toEqual({ status: 'ok', db: 'connected' })
+    expect(body.status).toBe('ok')
+    expect(body.db).toBe('connected')
+    // The endpoint also reports the photo volume, because an unwritable one
+    // silently kills photo submissions and avatars. 'writable (repaired)' is
+    // the same pass — it just means this call took ownership back first.
+    expect(body.photos).toMatch(/^writable/)
   })
 })
