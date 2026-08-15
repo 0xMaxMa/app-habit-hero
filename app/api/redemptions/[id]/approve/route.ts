@@ -15,6 +15,7 @@ import { addXp } from '@/lib/xp'
 import { levelForXp } from '@/lib/level'
 import { systemClock } from '@/lib/clock'
 import { applyGamification } from '@/lib/api/gamification'
+import { serializable } from '@/lib/api/tx'
 import {
   resolveActor,
   assertParent,
@@ -44,46 +45,51 @@ export const POST = withHandler<Ctx>(async (req, { params }) => {
     throw conflict(`Redemption is already ${redemption.status}`)
   }
 
-  const progress = await prisma.userProgress.findUnique({
-    where: { userId: redemption.redeemedBy },
-  })
-  const available = progress?.totalXp ?? 0
-  if (available < redemption.xpSpent) {
-    // Balance dropped below the cost since the request was made.
-    throw conflict('Not enough XP to approve this redemption', {
-      shortfall: redemption.xpSpent - available,
-      available,
-      xpCost: redemption.xpSpent,
-    })
-  }
-
-  const newTotal = addXp(available, -redemption.xpSpent)
   const reviewedAt = systemClock.now()
 
-  const ops = []
-  // Only touch progress when a row exists (it always does once the child has
-  // earned any XP; a zero-cost reward for a fresh child has nothing to deduct).
-  if (progress) {
-    ops.push(
-      prisma.userProgress.update({
+  // Read the balance, check it, and deduct inside ONE serializable transaction.
+  // Reading it outside meant the check was a snapshot: two redemptions approved
+  // at the same moment both saw the full balance, both passed, and only one
+  // deduction survived — the child got two rewards and paid for one.
+  const updated = await serializable(async (tx) => {
+    const fresh = await tx.rewardRedemption.findUnique({ where: { id: redemption.id } })
+    // Another approval may have claimed it while this one waited for its turn.
+    if (!fresh || fresh.status !== 'pending') {
+      throw conflict(`Redemption is already ${fresh?.status ?? 'gone'}`)
+    }
+
+    const progress = await tx.userProgress.findUnique({
+      where: { userId: redemption.redeemedBy },
+    })
+    const available = progress?.totalXp ?? 0
+    if (available < redemption.xpSpent) {
+      // Balance dropped below the cost since the request was made.
+      throw conflict('Not enough XP to approve this redemption', {
+        shortfall: redemption.xpSpent - available,
+        available,
+        xpCost: redemption.xpSpent,
+      })
+    }
+
+    const newTotal = addXp(available, -redemption.xpSpent)
+    // Only touch progress when a row exists (it always does once the child has
+    // earned any XP; a zero-cost reward for a fresh child has nothing to deduct).
+    if (progress) {
+      await tx.userProgress.update({
         where: { userId: redemption.redeemedBy },
         data: { totalXp: newTotal, currentLevel: levelForXp(newTotal) },
-      }),
-    )
-  }
-  ops.push(
-    prisma.rewardRedemption.update({
+      })
+    }
+
+    return tx.rewardRedemption.update({
       where: { id: redemption.id },
       data: { status: 'approved', reviewedAt },
       include: {
         reward: true,
         redeemer: { select: { id: true, name: true, role: true } },
       },
-    }),
-  )
-
-  const results = await prisma.$transaction(ops)
-  const updated = results[results.length - 1]
+    })
+  })
 
   // Re-evaluate badges now that the redemption is approved: this is what awards
   // "แลกรางวัลครั้งแรก" the moment a child spends XP. xpDelta 0 keeps the balance
