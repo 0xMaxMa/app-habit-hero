@@ -25,27 +25,38 @@ export type StreakMilestone = (typeof STREAK_MILESTONES)[number]
 
 const MS_PER_DAY = 86_400_000
 
-/** UTC day index — same value for any instant within the same UTC calendar day. */
-export function dayNumber(date: Date): number {
-  return Math.floor(date.getTime() / MS_PER_DAY)
-}
-
-/**
- * UTC week index — the period a `weekly` chore is satisfied for. Derived from
- * {@link dayNumber} so "this week" cannot drift from "today"; every caller
- * deciding whether a weekly chore is still outstanding must use this one.
- */
-export function weekNumber(date: Date): number {
-  return Math.floor(dayNumber(date) / 7)
-}
-
 /**
  * Local day index — same value for any instant within the same local calendar
- * day at `offsetMs` east of UTC. This is the day boundary the streak counts on.
+ * day at `offsetMs` east of UTC. This is the day boundary the streak counts on,
+ * and the one "งานวันนี้" resets on.
+ *
+ * There is deliberately no UTC-day counterpart: an earlier pair of `dayNumber`
+ * / `weekNumber` helpers bucketed by UTC, which put the family's day boundary at
+ * 07:00 local. A chore done at 06:45 landed in yesterday's bucket and then
+ * re-appeared as outstanding at 07:00. Every period question takes the offset
+ * now, so a caller cannot accidentally ask the UTC one.
  */
 export function localDayNumber(date: Date, offsetMs: number): number {
   return Math.floor((date.getTime() + offsetMs) / MS_PER_DAY)
 }
+
+/**
+ * Local week index — the period a `weekly` chore is satisfied for. Derived from
+ * {@link localDayNumber} so "this week" cannot drift from "today"; every caller
+ * deciding whether a weekly chore is still outstanding must use this one.
+ *
+ * The week runs Monday→Sunday, matching the "สัปดาห์นี้" strip in the UI. The
+ * `+ MONDAY_SHIFT_DAYS` is what buys that: local day 0 is 1970-01-01, a
+ * *Thursday*, so a bare `floor(day / 7)` started each period on a Thursday and
+ * a weekly chore done Monday read as outstanding again on Thursday morning —
+ * mid-week, halfway through the week the parent was looking at.
+ */
+export function localWeekNumber(date: Date, offsetMs: number): number {
+  return Math.floor((localDayNumber(date, offsetMs) + MONDAY_SHIFT_DAYS) / 7)
+}
+
+/** Days from local day 0 (Thursday) back to the Monday that began its week. */
+const MONDAY_SHIFT_DAYS = 3
 
 /** Is `streak` exactly on a milestone boundary? */
 export function isMilestone(streak: number): streak is StreakMilestone {

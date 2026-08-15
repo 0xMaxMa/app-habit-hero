@@ -2,17 +2,18 @@ import { describe, it, expect } from 'vitest'
 import {
   STREAK_MILESTONES,
   currentStreakAsOf,
-  dayNumber,
   isMilestone,
   localDayNumber,
+  localWeekNumber,
   milestoneReached,
   streakFromActiveDays,
-  weekNumber,
 } from './streak'
 import { THAI_LOCAL_OFFSET_MS } from './clock'
 
 /** Local day index for a literal instant, at the offset the streak runs on. */
 const day = (iso: string) => localDayNumber(new Date(iso), THAI_LOCAL_OFFSET_MS)
+/** Local week index for a literal instant, same offset. */
+const week = (iso: string) => localWeekNumber(new Date(iso), THAI_LOCAL_OFFSET_MS)
 
 describe('milestones', () => {
   it('exposes the PRD milestone set', () => {
@@ -33,29 +34,53 @@ describe('milestones', () => {
   })
 })
 
-describe('dayNumber', () => {
-  it('is stable within a UTC day and increments at UTC midnight', () => {
-    const a = dayNumber(new Date('2026-07-29T00:00:00Z'))
-    const b = dayNumber(new Date('2026-07-29T23:59:59Z'))
-    const c = dayNumber(new Date('2026-07-30T00:00:00Z'))
-    expect(a).toBe(b)
-    expect(c).toBe(a + 1)
-  })
-})
-
-describe('weekNumber', () => {
+describe('localWeekNumber', () => {
   it('is stable across seven days and rolls exactly one week later', () => {
-    const start = new Date('2026-07-30T09:00:00Z')
-    expect(weekNumber(new Date('2026-08-04T09:00:00Z'))).toBe(weekNumber(start))
-    expect(weekNumber(new Date(start.getTime() + 7 * 86_400_000))).toBe(weekNumber(start) + 1)
+    // Monday 10 August 2026, 16:00 Thai.
+    const start = new Date('2026-08-10T09:00:00Z')
+    expect(week('2026-08-15T09:00:00Z')).toBe(localWeekNumber(start, THAI_LOCAL_OFFSET_MS))
+    expect(
+      localWeekNumber(new Date(start.getTime() + 7 * 86_400_000), THAI_LOCAL_OFFSET_MS),
+    ).toBe(localWeekNumber(start, THAI_LOCAL_OFFSET_MS) + 1)
   })
 
-  it('rolls on Thursday — day 0 of the index is 1 Jan 1970, a Thursday', () => {
-    // Pinning the real (surprising) boundary: a weekly chore resets Thursday
-    // 00:00 UTC = 07:00 Thai, NOT Monday like the "สัปดาห์นี้" strip in the UI.
-    expect(weekNumber(new Date('2026-08-05T23:59:00Z'))).toBe(
-      weekNumber(new Date('2026-08-06T00:00:00Z')) - 1,
-    )
+  it('rolls at LOCAL midnight on Monday — the week the UI shows', () => {
+    // The whole calendar week the "สัปดาห์นี้" strip draws must be one period.
+    // 2026-08-16T16:59Z is 23:59 Thai on Sunday the 16th; one minute later is
+    // Monday 00:00 Thai and a new week.
+    expect(week('2026-08-16T16:59:00Z')).toBe(week('2026-08-16T17:00:00Z') - 1)
+  })
+
+  it('keeps Monday→Sunday together, so a weekly chore does not reset mid-week', () => {
+    // Mon 10 → Sun 16 August 2026 is one week; the Thursday inside it is NOT a
+    // boundary. Bucketing by floor(day/7) put the roll-over on Thursday (local
+    // day 0 is 1 Jan 1970, a Thursday), so a chore done Mon–Wed read as
+    // outstanding again on Thursday morning.
+    const monday = week('2026-08-10T04:00:00Z')
+    for (const iso of [
+      '2026-08-10T04:00:00Z', // Mon
+      '2026-08-12T04:00:00Z', // Wed
+      '2026-08-13T04:00:00Z', // Thu — used to start a new week here
+      '2026-08-16T04:00:00Z', // Sun
+    ]) {
+      expect(week(iso)).toBe(monday)
+    }
+    expect(week('2026-08-17T04:00:00Z')).toBe(monday + 1) // next Monday
+    expect(week('2026-08-09T04:00:00Z')).toBe(monday - 1) // the Sunday before
+  })
+
+  it('never disagrees with localDayNumber about which week a day is in', () => {
+    // The two are derived from one another on purpose: when "today" and "this
+    // week" came from different calendars, a weekly chore done earlier in the
+    // week stayed outstanding forever.
+    for (const iso of [
+      '2026-08-05T16:59:00Z',
+      '2026-08-05T17:00:00Z',
+      '2026-08-09T03:00:00Z',
+      '2026-12-31T20:00:00Z',
+    ]) {
+      expect(week(iso)).toBe(Math.floor((day(iso) + 3) / 7))
+    }
   })
 })
 
@@ -67,7 +92,7 @@ describe('localDayNumber', () => {
     const evening = new Date('2026-07-30T14:00:00Z') // 21:00 +07, same local day
     expect(day('2026-07-29T23:00:00Z')).toBe(day('2026-07-30T14:00:00Z'))
     expect(localDayNumber(morning, THAI_LOCAL_OFFSET_MS)).toBe(
-      dayNumber(new Date('2026-07-29T23:00:00Z')) + 1,
+      Math.floor(morning.getTime() / 86_400_000) + 1,
     )
     expect(localDayNumber(evening, THAI_LOCAL_OFFSET_MS)).toBe(
       localDayNumber(morning, THAI_LOCAL_OFFSET_MS),
