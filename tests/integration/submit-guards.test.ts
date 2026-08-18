@@ -18,6 +18,7 @@ import { promises as fs } from 'node:fs'
 import { prisma, resetAndSeed, getRefs, type Refs } from './helpers/db'
 import { AGENT_TOKEN } from './helpers/actor'
 import { THAI_LOCAL_OFFSET_MS } from '@/lib/clock'
+import { deadlineForDueTime, xpForSubmission } from '@/lib/point-rules'
 import { POST as submit } from '@/app/api/completions/route'
 import { POST as approve } from '@/app/api/completions/[id]/approve/route'
 import { POST as redeem } from '@/app/api/redemptions/route'
@@ -89,7 +90,18 @@ describe('duplicate submissions', () => {
       where: { choreId: chore.id, completedBy: R.childAId, status: 'approved' },
       _sum: { xpAwarded: true },
     })
-    expect(paid._sum.xpAwarded).toBe(chore.xpValue)
+    // What this pins is "paid once, not twice" — so the expectation is one
+    // award, computed the same way the route computes it. Asserting the
+    // chore's full value instead made the test wall-clock dependent: the seed
+    // chore is due at 20:00 Thai, so from 13:00 UTC onwards the submission is
+    // genuinely late and pays 60%, and the assertion failed for reasons that
+    // had nothing to do with the guard under test.
+    const row = await prisma.choreCompletion.findUniqueOrThrow({ where: { id } })
+    const due = deadlineForDueTime(row.submittedAt, chore.dueTime, THAI_LOCAL_OFFSET_MS)
+    const oneAward = due
+      ? xpForSubmission(chore.xpValue, due, row.submittedAt, chore.lateXpMultiplier)
+      : chore.xpValue
+    expect(paid._sum.xpAwarded).toBe(oneAward)
   })
 
   it('lets the child try again after a rejection', async () => {
