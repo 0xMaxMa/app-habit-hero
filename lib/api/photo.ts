@@ -76,6 +76,13 @@ async function writeUpload(file: File, preset: ImagePreset): Promise<string> {
   const uploaded = Buffer.from(await file.arrayBuffer())
   const image = await normalizeImage(uploaded, preset)
   const buffer = image.data
+  // Normalization could not get it under the preset's ceiling — which only
+  // happens for bytes it could not decode at all. Storing it anyway would put
+  // an unbounded payload somewhere it hurts (see AVATAR_PRESET), so this is the
+  // caller's problem to fix, with a message that says how.
+  if (preset.hardMaxBytes !== undefined && buffer.byteLength > preset.hardMaxBytes) {
+    throw badRequest('รูปนี้ใหญ่เกินไปและย่อไม่ได้ — ลองใช้รูปถ่ายปกติ (JPEG/PNG)')
+  }
   // The detected format beats the uploaded filename even when nothing was
   // re-encoded — the extension is what the serve route derives the content type
   // from, and a client is free to name a JPEG anything it likes. Only bytes we
@@ -218,16 +225,19 @@ export interface StoredPhoto {
   contentType: string
 }
 
-const CONTENT_TYPES: Record<string, string> = {
+/** Extension → content type for the serve routes. Exported so the upload path's
+ * own extension table can be checked against it: an extension missing here is
+ * served as `application/octet-stream`, which an <img> renders as nothing. */
+export const CONTENT_TYPES: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
-  // Phone-library formats. The web client transcodes these to JPEG before
-  // upload, so they should never land here — but if a browser fails to decode
-  // one, serving the right type still lets an Apple device render it instead of
-  // downloading an octet-stream blob.
+  // Phone-library formats. Both clients transcode these before storing, so they
+  // should never land here — but a HEIC the prebuilt libvips cannot decode is
+  // stored as sent, and serving the right type still lets an Apple device
+  // render it instead of downloading an octet-stream blob.
   '.heic': 'image/heic',
   '.heif': 'image/heif',
   '.avif': 'image/avif',

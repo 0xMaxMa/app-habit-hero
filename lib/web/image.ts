@@ -64,8 +64,9 @@ const NEVER_ENCODE = /^image\/(gif|svg\+xml)$/
  * over) are ALWAYS transcoded when the browser can decode them, even if small,
  * so the bytes leaving the device are already something every parent's browser
  * renders. Apple platforms decode HEIC natively, which is exactly where such
- * files come from, so the canvas path converts them at the source; the server
- * transcodes anything that slips past.
+ * files come from, so the canvas path converts them at the source — and it has
+ * to, because the server cannot: the prebuilt libvips behind lib/api/image has
+ * no HEVC decoder, so a HEIC that reaches it is stored as sent.
  *
  * @param maxDim  longest-edge cap in px (avatars 256, proof photos ~1280)
  * @param quality JPEG quality 0–1

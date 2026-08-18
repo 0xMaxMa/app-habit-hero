@@ -133,6 +133,25 @@ describe('savePhoto — normalization on the way in', () => {
     expect(url).toMatch(/^\/api\/photos\/[0-9a-f-]{36}\.jpg$/)
     expect(await fs.readdir(dir)).toHaveLength(1)
   })
+
+  it('refuses an undecodable avatar too big to shrink, which /pin would inline', async () => {
+    // An avatar is base64-inlined into the PUBLIC login page. Bytes no encoder
+    // can shrink (an iPhone .heic reaching the API directly — the prebuilt
+    // libvips has no HEVC decoder) must not be waved through at megabytes.
+    const huge = new File([new Uint8Array(1024 * 1024)], 'shot.heic', { type: 'image/heic' })
+
+    const err = await saveAvatar(huge).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).code).toBe('BAD_REQUEST')
+    expect(await fs.readdir(dir)).toHaveLength(0)
+  })
+
+  it('applies no such ceiling to a chore photo — nothing public inlines it', async () => {
+    const huge = new File([new Uint8Array(1024 * 1024)], 'shot.heic', { type: 'image/heic' })
+
+    await expect(savePhoto(huge)).resolves.toMatch(/\.heic$/)
+  })
 })
 
 describe('ensurePhotoDir', () => {

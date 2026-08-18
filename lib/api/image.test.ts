@@ -18,7 +18,8 @@
 
 import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
-import { AVATAR_PRESET, normalizeImage, PHOTO_PRESET } from './image'
+import { AVATAR_PRESET, normalizeImage, PHOTO_PRESET, STORED_EXTENSIONS } from './image'
+import { CONTENT_TYPES } from './photo'
 
 /** A JPEG of the given size, noisy enough that it does not compress to nothing
  * (a flat colour encodes so small that byte-size assertions stop meaning
@@ -43,6 +44,39 @@ async function noise(width: number, height: number): Promise<Buffer> {
 async function dims(buf: Buffer): Promise<{ width: number; height: number }> {
   const meta = await sharp(buf).metadata()
   return { width: meta.width ?? 0, height: meta.height ?? 0 }
+}
+
+/** An animated image of `frames` frames, in the given format. */
+async function animated(
+  width: number,
+  height: number,
+  frames: number,
+  to: 'gif' | 'webp',
+): Promise<Buffer> {
+  const pages = await Promise.all(
+    Array.from({ length: frames }, (_, i) =>
+      sharp(seededNoise(width, height, i), {
+        raw: { width, height, channels: 3 },
+      })
+        .png()
+        .toBuffer(),
+    ),
+  )
+  const joined = sharp(pages, { join: { animated: true } })
+  return to === 'gif' ? joined.gif().toBuffer() : joined.webp({ quality: 60 }).toBuffer()
+}
+
+/** Deterministic high-frequency bytes; `seed` varies them per frame. */
+function seededNoise(width: number, height: number, seed = 0): Buffer {
+  const data = Buffer.alloc(width * height * 3)
+  for (let i = 0; i < data.length; i++) {
+    data[i] = (i * 97 + ((i / width) | 0) * 31 + seed * 13) % 256
+  }
+  return data
+}
+
+async function pageCount(buf: Buffer): Promise<number> {
+  return (await sharp(buf, { animated: true }).metadata()).pages ?? 1
 }
 
 describe('normalizeImage — the cap', () => {
@@ -104,24 +138,31 @@ describe('normalizeImage — what it leaves alone', () => {
     expect(out.ext).toBe('.jpg')
   })
 
-  it('leaves an animated GIF alone — re-encoding would drop the animation', async () => {
-    const input = await sharp(await noise(64, 64)).gif().toBuffer()
+  it('leaves a small GIF alone, animation and all', async () => {
+    const input = await animated(64, 64, 4, 'gif')
+    expect(input.byteLength).toBeLessThanOrEqual(AVATAR_PRESET.keepBytes)
 
     const out = await normalizeImage(input, AVATAR_PRESET)
 
     expect(out.reencoded).toBe(false)
+    expect(out.data).toBe(input)
     expect(out.ext).toBe('.gif')
   })
 
-  it('leaves an SVG alone — rasterizing would throw the vector away', async () => {
+  it('rasterizes an SVG rather than storing markup the serve route cannot type', async () => {
+    // Stored as `.svg`, /api/photos hands it back as application/octet-stream —
+    // and /pin, which inlines an avatar as `data:<contentType>;base64,…`,
+    // renders nothing at all. A 256px raster is what the app displays anyway.
     const input = Buffer.from(
-      '<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="4000"><rect width="4000" height="4000" fill="red"/></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="4000"><circle cx="2000" cy="2000" r="1800" fill="red"/></svg>',
     )
 
-    const out = await normalizeImage(input, PHOTO_PRESET)
+    const out = await normalizeImage(input, AVATAR_PRESET)
 
-    expect(out.reencoded).toBe(false)
-    expect(out.data).toBe(input)
+    expect(out.reencoded).toBe(true)
+    expect(STORED_EXTENSIONS).toContain(out.ext)
+    const meta = await sharp(out.data).metadata()
+    expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBe(AVATAR_PRESET.maxDim)
   })
 
   it('stores bytes it cannot decode untouched, rather than failing the upload', async () => {
@@ -200,5 +241,65 @@ describe('normalizeImage — formats a phone produces', () => {
     expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBeLessThanOrEqual(
       PHOTO_PRESET.maxDim,
     )
+  })
+})
+
+describe('normalizeImage — animation', () => {
+  // An avatar is inlined as base64 into the PUBLIC /pin page, so an unbounded
+  // one is a slow login screen for everybody, not just a big file on a volume.
+  it('bounds an oversized animated GIF instead of waving it through', async () => {
+    const input = await animated(1200, 1200, 4, 'gif')
+    expect(input.byteLength).toBeGreaterThan(AVATAR_PRESET.keepBytes)
+
+    const out = await normalizeImage(input, AVATAR_PRESET)
+
+    expect(out.reencoded).toBe(true)
+    expect(out.data.byteLength).toBeLessThan(input.byteLength)
+    const meta = await sharp(out.data, { animated: true }).metadata()
+    expect(Math.max(meta.width ?? 0, meta.pageHeight ?? 0)).toBe(AVATAR_PRESET.maxDim)
+  })
+
+  it('keeps every frame when it has to shrink an animation', async () => {
+    // Fitting an animation to the cap must not silently turn it into a still —
+    // WebP carries the frames, JPEG would keep only the first.
+    const input = await animated(1200, 1200, 4, 'gif')
+
+    const out = await normalizeImage(input, AVATAR_PRESET)
+
+    expect(out.ext).toBe('.webp')
+    expect(await pageCount(out.data)).toBe(4)
+  })
+
+  it('does the same for an animated WebP, not just a GIF', async () => {
+    const input = await animated(600, 600, 4, 'webp')
+    expect(await pageCount(input)).toBe(4)
+
+    const out = await normalizeImage(input, AVATAR_PRESET)
+
+    expect(await pageCount(out.data)).toBe(4)
+    const meta = await sharp(out.data, { animated: true }).metadata()
+    expect(Math.max(meta.width ?? 0, meta.pageHeight ?? 0)).toBe(AVATAR_PRESET.maxDim)
+  })
+})
+
+describe('normalizeImage — every extension it hands back is servable', () => {
+  // The serve route types a file by its extension and falls back to
+  // application/octet-stream, which an <img> renders as nothing. Anything this
+  // module can name has to be in that table.
+  it('produces only extensions CONTENT_TYPES knows', () => {
+    for (const ext of STORED_EXTENSIONS) {
+      expect(CONTENT_TYPES[ext], `${ext} has no content type`).toBeTruthy()
+    }
+  })
+
+  it('names an AVIF something a browser will render', async () => {
+    // sharp reports AVIF as `format: 'heif'`, so a table keyed on that name and
+    // mapping to `.heic` would serve `image/heic` — which no browser renders.
+    const input = await sharp(await noise(400, 300)).avif({ quality: 50 }).toBuffer()
+
+    const out = await normalizeImage(input, PHOTO_PRESET)
+
+    expect(STORED_EXTENSIONS).toContain(out.ext)
+    expect(CONTENT_TYPES[out.ext as string]).toMatch(/^image\/(jpeg|webp)$/)
   })
 })
