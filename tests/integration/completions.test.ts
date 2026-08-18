@@ -9,6 +9,9 @@
  * expectation is exact and deterministic regardless of wall-clock run time.
  */
 
+import { promises as fs } from 'node:fs'
+import path from 'node:path'
+import sharp from 'sharp'
 import { describe, it, expect, beforeEach } from 'vitest'
 import { POST } from '@/app/api/completions/route'
 import { GET as listCompletions } from '@/app/api/completions/route'
@@ -28,6 +31,17 @@ function photoFile(): File {
   return new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'proof.jpg', {
     type: 'image/jpeg',
   })
+}
+
+/** A genuinely oversized JPEG, as a phone (and therefore the agent) produces. */
+async function bigPhotoFile(width: number, height: number): Promise<File> {
+  const channels = 3
+  const raw = Buffer.alloc(width * height * channels)
+  for (let i = 0; i < raw.length; i++) raw[i] = (i * 97 + ((i / width) | 0) * 31) % 256
+  const bytes = await sharp(raw, { raw: { width, height, channels } })
+    .jpeg({ quality: 95 })
+    .toBuffer()
+  return new File([bytes], 'from-phone.jpg', { type: 'image/jpeg' })
 }
 
 /**
@@ -431,5 +445,31 @@ describe('POST /api/completions/:id/unapprove — undo an approval', () => {
     expect(row.status).toBe('approved')
     const progress = await prisma.userProgress.findUniqueOrThrow({ where: { userId: childAId } })
     expect(progress.totalXp).toBe(150 + xp)
+  })
+})
+
+describe('POST /api/completions — the stored photo is bounded', () => {
+  // The agent path, which is the one that was unbounded: a parent forwards a
+  // phone photo over Telegram, the agent POSTs the file it downloaded, and no
+  // browser ever ran. Files up to 2048×1536 / 1 MB reached the volume that way.
+  it('caps an oversized agent upload at 1280px on disk', async () => {
+    const { childARef } = await getRefs()
+    const big = await bigPhotoFile(2048, 1536)
+
+    const res = await POST(submitRequest(childARef, { chore_id: IDS.choreDishes }, big))
+    const env = await res.json()
+    expect(env.ok).toBe(true)
+
+    const stored = path.join(
+      path.resolve(process.env.PHOTO_DIR as string),
+      path.basename(env.data.completion.photoUrl as string),
+    )
+    const bytes = await fs.readFile(stored)
+    const meta = await sharp(bytes).metadata()
+
+    expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBeLessThanOrEqual(1280)
+    expect(bytes.byteLength).toBeLessThan(big.size)
+
+    await fs.unlink(stored).catch(() => {})
   })
 })

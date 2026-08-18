@@ -1,17 +1,16 @@
 /**
  * lib/web/image.ts — browser-side image downscaling before upload.
  *
- * Why this exists: uploads are stored on the volume at their original size (no
- * server-side image processing — the app image ships no sharp/jimp). Avatars
- * are then INLINED as base64 data URIs into the PUBLIC /pin login page (that
- * page is pre-auth, so it can't hit the auth-gated /api/avatars route). A single
- * 2 MB photo turned the /pin HTML into ~7 MB, and hydrating that much inline
- * base64 on a phone left the login buttons unresponsive for several seconds —
- * i.e. "ปุ่มกดไม่ได้".
+ * Why this exists: avatars are INLINED as base64 data URIs into the PUBLIC /pin
+ * login page (that page is pre-auth, so it can't hit the auth-gated /api/avatars
+ * route). A single 2 MB photo turned the /pin HTML into ~7 MB, and hydrating
+ * that much inline base64 on a phone left the login buttons unresponsive for
+ * several seconds — i.e. "ปุ่มกดไม่ได้".
  *
- * Fixing it at the source: shrink images in the browser (via <canvas>) before
- * they ever reach the server, so both the stored file and the inlined data URI
- * stay tiny. Pure client util, no dependency.
+ * Shrinking here rather than only on the server also spares the upload itself,
+ * which is the part a child on mobile data actually waits for. The server
+ * normalizes every upload again (lib/api/image) with the same caps, so this
+ * step is an optimization — not the thing that keeps the volume bounded.
  */
 
 /** A decoded image source plus a disposer for whatever we allocated. */
@@ -62,11 +61,11 @@ const NEVER_ENCODE = /^image\/(gif|svg\+xml)$/
  * can't decode it (we never want the resize step to block a legitimate upload).
  *
  * Types outside WEB_SAFE (HEIC/HEIF/AVIF — what an iPhone photo library hands
- * over) are ALWAYS transcoded when the browser can decode them, even if small:
- * the app stores uploads verbatim and serves them by file extension, so a
- * `.heic` would reach a parent's Android/desktop browser as an unrenderable
- * blob. Apple platforms decode HEIC natively, which is exactly where such files
- * come from, so the canvas path converts them at the source.
+ * over) are ALWAYS transcoded when the browser can decode them, even if small,
+ * so the bytes leaving the device are already something every parent's browser
+ * renders. Apple platforms decode HEIC natively, which is exactly where such
+ * files come from, so the canvas path converts them at the source; the server
+ * transcodes anything that slips past.
  *
  * @param maxDim  longest-edge cap in px (avatars 256, proof photos ~1280)
  * @param quality JPEG quality 0–1

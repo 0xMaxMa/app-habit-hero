@@ -5,12 +5,17 @@
  * ./data/photos), NOT object storage. `savePhoto` writes an uploaded File and
  * returns a stable app-relative URL; `readPhoto` reads it back for the serve
  * route (GET /api/photos/[name]).
+ *
+ * Uploads are normalized on the way in (see ./image): whatever a client hands
+ * over is fitted to a longest-edge cap and re-encoded before it is written, so
+ * the size of what is stored does not depend on which client sent it.
  */
 
 import { randomUUID } from 'node:crypto'
 import { constants as fsConstants, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { badRequest, notFound, storageUnavailable } from './errors'
+import { AVATAR_PRESET, normalizeImage, PHOTO_PRESET, type ImagePreset } from './image'
 
 /** Absolute directory photos are stored in. */
 function photoDir(): string {
@@ -38,7 +43,7 @@ function safeExt(originalName: string): string {
  * (`/api/photos/<filename>`) suitable for storing on ChoreCompletion.photoUrl.
  */
 export async function savePhoto(file: File): Promise<string> {
-  const filename = await writeUpload(file)
+  const filename = await writeUpload(file, PHOTO_PRESET)
   return `/api/photos/${filename}`
 }
 
@@ -48,18 +53,18 @@ export async function savePhoto(file: File): Promise<string> {
  * distinct route so authorization keys off the owning user, not a completion.
  */
 export async function saveAvatar(file: File): Promise<string> {
-  const filename = await writeUpload(file)
+  const filename = await writeUpload(file, AVATAR_PRESET)
   return `/api/avatars/${filename}`
 }
 
-/** Hard ceiling on a stored upload. The web client downscales images well
- * below this (avatars ~256px, proof photos ~1280px); this only rejects
- * pathological direct uploads so a single file can't bloat the volume — or, for
- * avatars, the inlined /pin payload. */
+/** Hard ceiling on what will even be decoded. Normalization (./image) is what
+ * bounds the stored size; this only stops a pathological upload from being
+ * read into memory in the first place. */
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024 // 12 MB
 
-/** Shared: validate + write a File to the upload dir, returning its filename. */
-async function writeUpload(file: File): Promise<string> {
+/** Shared: validate, normalize, and write a File to the upload dir, returning
+ * its filename. */
+async function writeUpload(file: File, preset: ImagePreset): Promise<string> {
   if (!file || typeof file.arrayBuffer !== 'function') {
     throw badRequest('A file is required')
   }
@@ -68,8 +73,20 @@ async function writeUpload(file: File): Promise<string> {
   }
 
   const dir = photoDir()
-  const filename = `${randomUUID()}${safeExt(file.name || '')}`
-  const buffer = Buffer.from(await file.arrayBuffer())
+  const uploaded = Buffer.from(await file.arrayBuffer())
+  const image = await normalizeImage(uploaded, preset)
+  const buffer = image.data
+  // The detected format beats the uploaded filename even when nothing was
+  // re-encoded — the extension is what the serve route derives the content type
+  // from, and a client is free to name a JPEG anything it likes. Only bytes we
+  // could not identify at all fall back to the name.
+  const filename = `${randomUUID()}${image.ext ?? safeExt(file.name || '')}`
+
+  if (image.reencoded) {
+    console.info(
+      `[photo] normalized upload: ${uploaded.byteLength} → ${buffer.byteLength} bytes (max ${preset.maxDim}px) as ${filename}`,
+    )
+  }
 
   try {
     await fs.mkdir(dir, { recursive: true })
