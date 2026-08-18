@@ -19,9 +19,11 @@
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import sharp from 'sharp'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './errors'
-import { ensurePhotoDir, savePhoto } from './photo'
+import { PHOTO_PRESET } from './image'
+import { ensurePhotoDir, saveAvatar, savePhoto } from './photo'
 
 let dir: string
 const original = process.env.PHOTO_DIR
@@ -73,6 +75,82 @@ describe('savePhoto', () => {
 
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).code).toBe('BAD_REQUEST')
+  })
+})
+
+/** A real encoded image of the given size — the upload path now decodes what
+ * it is handed, so a buffer of zero bytes no longer exercises it. */
+async function imageFile(
+  name: string,
+  width: number,
+  height: number,
+  type = 'image/jpeg',
+): Promise<File> {
+  const channels = 3
+  const raw = Buffer.alloc(width * height * channels)
+  for (let i = 0; i < raw.length; i++) raw[i] = (i * 97 + ((i / width) | 0) * 31) % 256
+  const bytes = await sharp(raw, { raw: { width, height, channels } })
+    .jpeg({ quality: 95 })
+    .toBuffer()
+  return new File([bytes], name, { type })
+}
+
+/** Longest edge of an image on disk. */
+async function longestEdge(file: string): Promise<number> {
+  const meta = await sharp(await fs.readFile(file)).metadata()
+  return Math.max(meta.width ?? 0, meta.height ?? 0)
+}
+
+describe('savePhoto — normalization on the way in', () => {
+  // The bug this pins: the gateway agent POSTs a photo straight from Telegram,
+  // bypassing the browser downscaler entirely, so files well over the app's own
+  // 1280px promise were landing on the volume — 2048×1536 among them.
+  it('caps an oversized upload at the photo dimension, whatever client sent it', async () => {
+    const url = await savePhoto(await imageFile('from-agent.jpg', 2048, 1536))
+
+    const stored = path.join(dir, path.basename(url))
+    expect(await longestEdge(stored)).toBeLessThanOrEqual(PHOTO_PRESET.maxDim)
+  })
+
+  it('caps an avatar much tighter — it is inlined into the public /pin page', async () => {
+    const url = await saveAvatar(await imageFile('face.jpg', 2048, 1536))
+
+    const stored = path.join(dir, path.basename(url))
+    expect(await longestEdge(stored)).toBe(256)
+  })
+
+  it('names the file after the bytes, not after what the client called it', async () => {
+    // A JPEG announced as `.png`: the serve route derives the content type from
+    // the extension, so trusting the name would hand a browser the wrong one.
+    const url = await savePhoto(await imageFile('mislabelled.png', 1600, 1200))
+
+    expect(url).toMatch(/\.jpg$/)
+  })
+
+  it('still stores something it cannot decode, rather than failing the upload', async () => {
+    const url = await savePhoto(fakeFile('proof.jpg')) // 32 zero bytes
+
+    expect(url).toMatch(/^\/api\/photos\/[0-9a-f-]{36}\.jpg$/)
+    expect(await fs.readdir(dir)).toHaveLength(1)
+  })
+
+  it('refuses an undecodable avatar too big to shrink, which /pin would inline', async () => {
+    // An avatar is base64-inlined into the PUBLIC login page. Bytes no encoder
+    // can shrink (an iPhone .heic reaching the API directly — the prebuilt
+    // libvips has no HEVC decoder) must not be waved through at megabytes.
+    const huge = new File([new Uint8Array(1024 * 1024)], 'shot.heic', { type: 'image/heic' })
+
+    const err = await saveAvatar(huge).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).code).toBe('BAD_REQUEST')
+    expect(await fs.readdir(dir)).toHaveLength(0)
+  })
+
+  it('applies no such ceiling to a chore photo — nothing public inlines it', async () => {
+    const huge = new File([new Uint8Array(1024 * 1024)], 'shot.heic', { type: 'image/heic' })
+
+    await expect(savePhoto(huge)).resolves.toMatch(/\.heic$/)
   })
 })
 
