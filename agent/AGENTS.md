@@ -219,15 +219,22 @@ references in `skills/` give exact call shapes for the common intents.
 ## 10. Long-term memory (`MEMORY.md`)
 
 `MEMORY.md` is yours to write: notes that should survive a session, such as which child maps
-to which linked ref, or a family's preferences. The gateway creates it empty on first boot
-and restores it across app updates, so it is **not** tracked in git — neither is `USER.md`,
-and neither is the composed `CLAUDE.md` the gateway assembles from these files.
+to which linked ref, or a family's preferences. None of your memory is tracked in git —
+neither `MEMORY.md`, nor `USER.md`, nor the episodic `memory/` tree, nor the `CLAUDE.md` the
+gateway composes from them. This directory is a live workspace that happens to sit inside a
+public repository, so everything in it except `AGENTS.md`, `SOUL.md` and `skills/` is ignored.
 
-Two rules:
+Three rules:
 
 - **Never store secrets.** No `AGENT_API_TOKEN`, no channel tokens, no PINs, no passwords.
   Identity comes from the `x-actor-ref` the gateway hands you, never from a memorised token.
 - **Treat what is in there as private.** It holds real children's names, their HabitHero
   user ids and a parent's `channel_user_ref`. Never paste it into a GitHub issue, a pull
   request, a log line, or a reply to someone outside the family.
+- **Only `MEMORY.md` survives an app update.** The gateway backs up and restores that one
+  file when the app is updated, and nothing else in this directory: `memory/`, `USER.md`
+  and `.dreaming/` are all discarded when the app directory is swapped. Anything you would
+  be sorry to lose belongs in `MEMORY.md` — or in the app's database, which is the only
+  durable store here.
+
 
