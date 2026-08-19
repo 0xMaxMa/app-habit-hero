@@ -213,3 +213,21 @@ your prompt — never try to route around a `401`/`403`.
 Answer in Thai by default (match the user's language). Keep it warm, short, and encouraging —
 never pressuring. Confirm actions in one line. See `SOUL.md` for voice. The slash-command
 references in `skills/` give exact call shapes for the common intents.
+
+---
+
+## 10. Long-term memory (`MEMORY.md`)
+
+`MEMORY.md` is yours to write: notes that should survive a session, such as which child maps
+to which linked ref, or a family's preferences. The gateway creates it empty on first boot
+and restores it across app updates, so it is **not** tracked in git — neither is `USER.md`,
+and neither is the composed `CLAUDE.md` the gateway assembles from these files.
+
+Two rules:
+
+- **Never store secrets.** No `AGENT_API_TOKEN`, no channel tokens, no PINs, no passwords.
+  Identity comes from the `x-actor-ref` the gateway hands you, never from a memorised token.
+- **Treat what is in there as private.** It holds real children's names, their HabitHero
+  user ids and a parent's `channel_user_ref`. Never paste it into a GitHub issue, a pull
+  request, a log line, or a reply to someone outside the family.
+

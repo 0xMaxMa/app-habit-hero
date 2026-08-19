@@ -38,6 +38,22 @@ agent/.sessions/
 agent/.telegram-state/
 agent/.discord-state/
 agent/.line-state/
+agent/.dreaming/
+# agent/CLAUDE.md is GENERATED, exactly like docker-compose.yml above: the
+# gateway composes it from AGENTS.md + SOUL.md + USER.md + MEMORY.md plus the
+# skill list of whatever host it boots on, and rewrites it on every start and
+# on every workspace edit. A committed copy is therefore always stale, and it
+# leaks the host's unrelated skills into this repo. AGENTS.md, SOUL.md and
+# skills/ are the sources that ship; this is their build output.
+agent/CLAUDE.md
+# MEMORY.md and USER.md are the agent's runtime memory. In a real install they
+# hold one family's private data — children's names, their HabitHero user ids
+# and the parent's channel_user_ref. This repo is public, so they stay out of
+# it. The gateway creates MEMORY.md empty on first boot and carries it across
+# app updates; USER.md is optional and only exists if someone writes one, and
+# an app update does NOT preserve it. See "Long-term memory" in agent/AGENTS.md.
+agent/MEMORY.md
+agent/USER.md
 
 # --- design working files ---------------------------------------------------
 # The whole directory stays private: PRD, task board, design prompts and the
