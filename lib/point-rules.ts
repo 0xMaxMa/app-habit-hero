@@ -7,12 +7,26 @@
  *
  * Deadline comparison is exact-instant: submitting *at* the deadline is on
  * time; one millisecond after is late. Pure — no Prisma, no React.
+ *
+ * Also home to MAX_DEDUCTION_XP, the ceiling on a single parent deduction.
  */
 
 import type { Clock } from './clock'
 import { applyLatePenalty, DEFAULT_LATE_PENALTY_MULTIPLIER } from './xp'
 
 export type CompletionOutcome = 'on_time' | 'late' | 'miss'
+
+/**
+ * Most a parent may take off in one deduction (POST /api/deductions).
+ *
+ * A cap exists because this is the one place a parent types a raw number
+ * straight onto a child's balance — a stray keypress ("500" → "5000") would
+ * otherwise wipe out weeks of work in one tap, and the floor at 0 hides how far
+ * past the balance the request went. 1,000 XP is ~10 of the biggest everyday
+ * chores (100 XP), so it comfortably covers any real "หักคะแนน" while still
+ * catching a typo. Bigger corrections are deliberately several explicit steps.
+ */
+export const MAX_DEDUCTION_XP = 1000
 
 /** Was the submission after the deadline? (equal instant = on time). */
 export function isLate(dueAt: Date, submittedAt: Date): boolean {

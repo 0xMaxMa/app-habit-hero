@@ -115,6 +115,8 @@ model User {
   reviewedCompletions ChoreCompletion[]  @relation("CompletionReviewer")
   redemptions         RewardRedemption[] @relation("RedemptionRedeemer")
   badges              UserBadge[]
+  pointAdjustments    PointAdjustment[]  @relation("AdjustmentSubject")
+  authoredAdjustments PointAdjustment[]  @relation("AdjustmentAuthor")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -266,6 +268,52 @@ model UserProgress {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("user_progress")
+}
+
+/// A parent-initiated XP change that is not a chore and not a reward — today
+/// only the deduction ("หักคะแนน") the parent UI writes.
+///
+/// XP has no ledger: a balance lives on UserProgress and the history screens are
+/// built from ChoreCompletion (earned) + RewardRedemption (spent). A deduction
+/// belongs to neither, so without a row of its own the child's total would just
+/// drop with nothing on any screen to explain it. Each row records the amount,
+/// the reason, which parent did it and when, so both the parent history and the
+/// child's own timeline can show it — never a silent deduction.
+///
+/// `xpDelta` is SIGNED, the same convention as lib/xp.addXp's delta: a deduction
+/// is negative. Positive is left open for a logged bonus (POST /api/bonus does
+/// not write here yet), so a future one needs no second table.
+model PointAdjustment {
+  id String @id @default(cuid())
+
+  userId String @map("user_id")
+  // Cascade like UserProgress / UserBadge: an adjustment is a fact about one
+  // child's balance and means nothing once that child is gone.
+  user   User   @relation("AdjustmentSubject", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Negative for a deduction. Never 0 — an adjustment that changes nothing is
+  /// not an event worth recording.
+  xpDelta Int @map("xp_delta")
+
+  /// Why it happened. Required (unlike a bonus note) — the child sees this, and
+  /// "you lost 50 XP" with no reason is the thing we are avoiding.
+  reason String
+
+  /// XP actually removed from the balance, which is smaller than |xpDelta| when
+  /// the deduction hit the zero floor. Stored so the history shows what really
+  /// happened instead of recomputing a past balance.
+  xpApplied Int @map("xp_applied")
+
+  createdBy String? @map("created_by")
+  // SetNull like ChoreCompletion.reviewedBy: removing a co-parent must not erase
+  // the child's history along with them.
+  creator   User?   @relation("AdjustmentAuthor", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([createdBy])
+  @@map("point_adjustments")
 }
 
 model Badge {

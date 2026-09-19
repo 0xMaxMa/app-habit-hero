@@ -9,11 +9,16 @@
  * an activity timeline. Client-side fetch only (the (parent) layout provides
  * the parent-only guard + shell) so `next build` never touches Postgres.
  *
+ * It is also the one place a parent can take XP back off a child
+ * (DeductPointsCard → POST /api/deductions); those entries are folded into the
+ * same timeline, tinted danger so they never read as an earning.
+ *
  * Data:
  *   • GET /api/progress?user=<id>        → name, xp, level, xpToNext, streak, avatar
  *   • GET /api/badges?user=<id>          → full earned/locked wall
  *   • GET /api/chores/today?child=<id>   → still-pending chores today
  *   • GET /api/completions?child=<id>    → activity timeline + this-week strip
+ *   • GET /api/deductions?child=<id>     → หักคะแนน entries for the timeline
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -25,8 +30,12 @@ import {
   Card,
   PhotoThumb,
   ProgressBar,
+  XpBadge,
+  cn,
   type ChoreStatus,
 } from '@/components/ui'
+import { DeductPointsCard, type DeductionResult } from '@/components/DeductPointsCard'
+import type { Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
 import { levelInfo } from '@/lib/level'
@@ -73,6 +82,18 @@ interface Completion {
 interface CompletionsResponse {
   completions: Completion[]
 }
+interface DeductionsResponse {
+  deductions: Deduction[]
+}
+
+/**
+ * The timeline mixes two record types. `at` is the sort key so both kinds are
+ * ordered on one axis (a completion by when it was submitted, a deduction by
+ * when the parent made it).
+ */
+type TimelineEntry =
+  | { kind: 'completion'; at: number; completion: Completion }
+  | { kind: 'deduction'; at: number; deduction: Deduction }
 
 // ---- Date helpers (local calendar) ----------------------------------------
 
@@ -119,7 +140,9 @@ export default function ChildProfilePage() {
   const [badges, setBadges] = useState<BadgesResponse | null>(null)
   const [today, setToday] = useState<TodayResponse | null>(null)
   const [completions, setCompletions] = useState<Completion[] | null>(null)
+  const [deductions, setDeductions] = useState<Deduction[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
   // Bumping this key re-runs the loader; `background` marks a silent refresh.
   const [reloadKey, setReloadKey] = useState(0)
   const background = useRef(false)
@@ -130,17 +153,19 @@ export default function ChildProfilePage() {
     background.current = false
     async function load() {
       try {
-        const [p, b, t, c] = await Promise.all([
+        const [p, b, t, c, d] = await Promise.all([
           api.get<ProgressResponse>(`/api/progress?user=${encodeURIComponent(childId)}`),
           api.get<BadgesResponse>(`/api/badges?user=${encodeURIComponent(childId)}`),
           api.get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(childId)}`),
           api.get<CompletionsResponse>(`/api/completions?child=${encodeURIComponent(childId)}`),
+          api.get<DeductionsResponse>(`/api/deductions?child=${encodeURIComponent(childId)}`),
         ])
         if (!alive) return
         setProgress(p)
         setBadges(b)
         setToday(t)
         setCompletions(c.completions)
+        setDeductions(d.deductions)
         setError(null)
       } catch (err) {
         if (!alive || silent) return
@@ -160,6 +185,27 @@ export default function ChildProfilePage() {
     setReloadKey((k) => k + 1)
   })
 
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 4000)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  /** A deduction just landed: reflect it immediately, then reconcile silently. */
+  function onDeducted(res: DeductionResult) {
+    setDeductions((prev) => (prev ? [res.deduction, ...prev] : [res.deduction]))
+    setProgress((prev) => (prev ? { ...prev, xp: res.xp, level: res.level, xpToNext: res.xpToNext } : prev))
+    setToast(
+      `หัก ${res.applied.toLocaleString()} XP แล้ว` +
+        (res.floored && res.applied < res.requested
+          ? ` (ขอหัก ${res.requested.toLocaleString()} แต่คะแนนมีไม่ถึง)`
+          : '') +
+        (res.leveledDown ? ` · Level ลดเหลือ ${res.level}` : ''),
+    )
+    background.current = true
+    setReloadKey((k) => k + 1)
+  }
+
   if (error) {
     return (
       <div className="space-y-4">
@@ -171,7 +217,7 @@ export default function ChildProfilePage() {
     )
   }
 
-  if (!progress || !badges || !today || !completions) {
+  if (!progress || !badges || !today || !completions || !deductions) {
     return (
       <div className="space-y-4">
         <BackLink />
@@ -185,10 +231,19 @@ export default function ChildProfilePage() {
   const span = info.nextThreshold - info.currentThreshold
   const totalDone = completions.filter((c) => c.status === 'approved').length
 
-  // Newest-first timeline.
-  const timeline = [...completions].sort(
-    (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime(),
-  )
+  // Newest-first timeline of both record kinds on one axis.
+  const timeline: TimelineEntry[] = [
+    ...completions.map<TimelineEntry>((c) => ({
+      kind: 'completion',
+      at: new Date(c.submittedAt).getTime(),
+      completion: c,
+    })),
+    ...deductions.map<TimelineEntry>((d) => ({
+      kind: 'deduction',
+      at: new Date(d.createdAt).getTime(),
+      deduction: d,
+    })),
+  ].sort((a, b) => b.at - a.at)
 
   // "This week" — one cell per weekday (Mon–Sun).
   const monday = mondayOfWeek(new Date())
@@ -318,56 +373,47 @@ export default function ChildProfilePage() {
               <p className="text-sm font-semibold text-ink-500">ยังไม่มีกิจกรรม</p>
             ) : (
               <ul className="space-y-0">
-                {timeline.map((c, i) => {
-                  const st = completionStatus(c)
-                  return (
-                    <li key={c.id} className="flex gap-3.5 pb-4 last:pb-0">
-                      {/* dot + connector */}
-                      <div className="flex flex-col items-center gap-1">
-                        <span
-                          className={
-                            'grid h-7 w-7 shrink-0 place-items-center rounded-pill text-xs font-black ' +
-                            (c.status === 'approved'
+                {timeline.map((entry, i) => (
+                  <li
+                    key={`${entry.kind}-${entry.kind === 'completion' ? entry.completion.id : entry.deduction.id}`}
+                    className="flex gap-3.5 pb-4 last:pb-0"
+                  >
+                    {/* dot + connector */}
+                    <div className="flex flex-col items-center gap-1">
+                      <span
+                        className={cn(
+                          'grid h-7 w-7 shrink-0 place-items-center rounded-pill text-xs font-black',
+                          entry.kind === 'deduction'
+                            ? 'bg-danger-100 text-danger-500'
+                            : entry.completion.status === 'approved'
                               ? 'bg-success-100 text-success-500'
-                              : c.status === 'rejected'
+                              : entry.completion.status === 'rejected'
                                 ? 'bg-danger-100 text-danger-500'
-                                : 'bg-cream-300 text-ink-500')
-                          }
-                        >
-                          {c.status === 'approved' ? '✓' : c.status === 'rejected' ? '✕' : '⏳'}
-                        </span>
-                        {i < timeline.length - 1 && (
-                          <span className="w-0.5 flex-1 bg-cream-500" />
+                                : 'bg-cream-300 text-ink-500',
                         )}
-                      </div>
-                      {/* body — min-w-0 so the row can shrink below the title's
-                          width. Without it this flex item keeps min-width:auto,
-                          and `truncate` (white-space:nowrap) makes its
-                          min-content the WHOLE title, pushing the card, the main
-                          column and the page wider than the phone. */}
-                      <div className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border-[1.5px] border-cream-400 bg-cream-100 px-3.5 py-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-extrabold text-ink-900">
-                            {c.chore.title}
-                          </p>
-                          <p className="mt-0.5 text-xs font-semibold text-ink-500">
-                            {timeLabel(c.submittedAt)} · {st.meta}
-                          </p>
-                        </div>
-                        <span className="whitespace-nowrap text-sm font-black text-xp-600">
-                          +{(c.xpAwarded ?? c.chore.xpValue).toLocaleString()} XP
-                        </span>
-                        {c.photoUrl && (
-                          <PhotoThumb
-                            photoUrl={c.photoUrl}
-                            title={c.chore.title}
-                            size="sm"
-                          />
-                        )}
-                      </div>
-                    </li>
-                  )
-                })}
+                      >
+                        {entry.kind === 'deduction'
+                          ? '➖'
+                          : entry.completion.status === 'approved'
+                            ? '✓'
+                            : entry.completion.status === 'rejected'
+                              ? '✕'
+                              : '⏳'}
+                      </span>
+                      {i < timeline.length - 1 && <span className="w-0.5 flex-1 bg-cream-500" />}
+                    </div>
+                    {/* body — min-w-0 so the row can shrink below the title's
+                        width. Without it this flex item keeps min-width:auto,
+                        and `truncate` (white-space:nowrap) makes its
+                        min-content the WHOLE title, pushing the card, the main
+                        column and the page wider than the phone. */}
+                    {entry.kind === 'deduction' ? (
+                      <DeductionTimelineBody deduction={entry.deduction} />
+                    ) : (
+                      <CompletionTimelineBody completion={entry.completion} />
+                    )}
+                  </li>
+                ))}
               </ul>
             )}
           </Card>
@@ -404,6 +450,14 @@ export default function ChildProfilePage() {
             </div>
           </Card>
 
+          {/* หักคะแนน — last in the column: rarely used, and it takes XP away. */}
+          <DeductPointsCard
+            childId={childId}
+            childName={progress.name}
+            currentXp={progress.xp}
+            onDeducted={onDeducted}
+          />
+
           {/* Today */}
           <Card>
             <h3 className="mb-3 text-base font-black text-ink-900">
@@ -428,6 +482,60 @@ export default function ChildProfilePage() {
           </Card>
         </div>
       </div>
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed inset-x-4 bottom-6 z-50 mx-auto max-w-md rounded-2xl bg-danger-500 px-4 py-3 text-center text-sm font-extrabold text-white shadow-lg"
+        >
+          {toast}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---- Timeline bodies ------------------------------------------------------
+
+function CompletionTimelineBody({ completion }: { completion: Completion }) {
+  const st = completionStatus(completion)
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border-[1.5px] border-cream-400 bg-cream-100 px-3.5 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-extrabold text-ink-900">{completion.chore.title}</p>
+        <p className="mt-0.5 text-xs font-semibold text-ink-500">
+          {timeLabel(completion.submittedAt)} · {st.meta}
+        </p>
+      </div>
+      <span className="whitespace-nowrap text-sm font-black text-xp-600">
+        +{(completion.xpAwarded ?? completion.chore.xpValue).toLocaleString()} XP
+      </span>
+      {completion.photoUrl && (
+        <PhotoThumb photoUrl={completion.photoUrl} title={completion.chore.title} size="sm" />
+      )}
+    </div>
+  )
+}
+
+/**
+ * A หักคะแนน row. Same rail as a completion, but danger-tinted and it leads with
+ * the reason — on this page the parent already knows they did it; what matters
+ * when scrolling back is WHY. (The list pages use the fuller `DeductionRow`.)
+ */
+function DeductionTimelineBody({ deduction }: { deduction: Deduction }) {
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border-[1.5px] border-danger-500/30 bg-danger-100/60 px-3.5 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-extrabold text-ink-900">หักคะแนน · {deduction.reason}</p>
+        <p className="mt-0.5 text-xs font-semibold text-ink-500">
+          {timeLabel(deduction.createdAt)}
+          {deduction.by ? ` · โดย${deduction.by.name}` : ''}
+          {deduction.applied < deduction.amount
+            ? ` · คะแนนไม่พอ หักได้ ${deduction.applied.toLocaleString()} XP`
+            : ''}
+        </p>
+      </div>
+      <XpBadge value={-deduction.amount} tone="penalty" size="sm" />
     </div>
   )
 }

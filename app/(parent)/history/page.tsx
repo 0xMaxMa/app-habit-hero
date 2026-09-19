@@ -7,6 +7,10 @@
  * completion (approved / pending / rejected) with photo thumbnails, so a parent
  * can scroll back through what the kids did and how it was reviewed.
  *
+ * หักคะแนน entries are folded into the same day groups (danger-tinted, via the
+ * shared DeductionRow) — a balance that moved down has to be as findable here as
+ * the chore that moved it up.
+ *
  * Client-side fetch only (the (parent)/layout already provides the desktop
  * shell + parent-only guard), so `next build` never touches Postgres.
  *
@@ -18,6 +22,7 @@
  *   • GET /api/completions[?child=<id>] → family-scoped completions of ALL
  *     statuses (the endpoint already returns every status when `status` is
  *     omitted; we sort newest-first here per its documented caller contract).
+ *   • GET /api/deductions[?child=<id>]  → หักคะแนน entries, same family scope.
  *   • GET /api/progress?scope=weekly    → the family's children, for the filter.
  *   • POST /api/completions/:id/unapprove → undo an approval.
  *
@@ -37,6 +42,7 @@ import {
   cn,
   type ChoreStatus,
 } from '@/components/ui'
+import { DeductionRow, type Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
 
@@ -56,6 +62,17 @@ interface Completion {
 interface CompletionsResponse {
   completions: Completion[]
 }
+interface DeductionsResponse {
+  deductions: Deduction[]
+}
+
+/**
+ * The timeline mixes two record types. `at` is the single sort/group key so a
+ * deduction lands in the right day next to the chores around it.
+ */
+type TimelineEntry =
+  | { kind: 'completion'; at: number; completion: Completion }
+  | { kind: 'deduction'; at: number; deduction: Deduction }
 interface WeeklyChild {
   userId: string
   name: string
@@ -81,6 +98,7 @@ const STATUS_CHIP: Record<Completion['status'], ChoreStatus> = {
 
 export default function HistoryPage() {
   const [entries, setEntries] = useState<Completion[] | null>(null)
+  const [deductions, setDeductions] = useState<Deduction[] | null>(null)
   const [children, setChildren] = useState<WeeklyChild[]>([])
   const [childFilter, setChildFilter] = useState<string>('') // '' = ทุกคน
   const [error, setError] = useState<string | null>(null)
@@ -117,23 +135,25 @@ export default function HistoryPage() {
     background.current = false
     if (!silent) {
       setEntries(null)
+      setDeductions(null)
       setError(null)
     }
 
-    const path = childFilter
-      ? `/api/completions?child=${encodeURIComponent(childFilter)}`
-      : '/api/completions'
+    const suffix = childFilter ? `?child=${encodeURIComponent(childFilter)}` : ''
 
-    api
-      .get<CompletionsResponse>(path)
-      .then((res) => {
+    Promise.all([
+      api.get<CompletionsResponse>(`/api/completions${suffix}`),
+      api.get<DeductionsResponse>(`/api/deductions${suffix}`),
+    ])
+      .then(([comps, deds]) => {
         if (!alive) return
         // Endpoint sorts submittedAt asc; the timeline reads newest-first.
-        const sorted = [...res.completions].sort(
+        const sorted = [...comps.completions].sort(
           (a, b) =>
             new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime(),
         )
         setEntries(sorted)
+        setDeductions(deds.deductions)
         setError(null)
       })
       .catch((err) => {
@@ -144,6 +164,7 @@ export default function HistoryPage() {
             : 'โหลดประวัติไม่สำเร็จ ลองรีเฟรชอีกครั้ง',
         )
         setEntries([])
+        setDeductions([])
       })
 
     return () => {
@@ -214,13 +235,33 @@ export default function HistoryPage() {
     }
   }
 
+  // Merge both record kinds onto one axis, newest-first, then group by day.
+  const timeline = useMemo<TimelineEntry[]>(
+    () =>
+      [
+        ...(entries ?? []).map<TimelineEntry>((c) => ({
+          kind: 'completion',
+          at: new Date(c.submittedAt).getTime(),
+          completion: c,
+        })),
+        ...(deductions ?? []).map<TimelineEntry>((d) => ({
+          kind: 'deduction',
+          at: new Date(d.createdAt).getTime(),
+          deduction: d,
+        })),
+      ].sort((a, b) => b.at - a.at),
+    [entries, deductions],
+  )
+
   // Group the sorted entries under a per-day header for a scannable timeline.
-  const groups = useMemo(() => groupByDay(entries ?? []), [entries])
+  const groups = useMemo(() => groupByDay(timeline), [timeline])
 
   // Four KPI stat cards (design S8): งานเดือนนี้ / XP รวม / อัตราตรงเวลา / รูป.
+  // Deliberately still chore-only — "XP เดือนนี้" is what the kids EARNED, and
+  // netting deductions into it would quietly change what an existing card means.
   const stats = useMemo(() => computeStats(entries ?? []), [entries])
 
-  const loading = entries === null && error === null
+  const loading = (entries === null || deductions === null) && error === null
 
   return (
     <div className="space-y-6">
@@ -277,13 +318,23 @@ export default function HistoryPage() {
 
       {loading ? (
         <TimelineSkeleton />
-      ) : entries && entries.length === 0 && !error ? (
+      ) : timeline.length === 0 && !error ? (
         <EmptyState hasFilter={childFilter !== ''} />
       ) : (
         <div className="space-y-8">
           {groups.map((group) => {
             const dayXp = group.items.reduce(
-              (sum, e) => sum + (e.status === 'approved' ? (e.xpAwarded ?? 0) : 0),
+              (sum, e) =>
+                sum +
+                (e.kind === 'completion' && e.completion.status === 'approved'
+                  ? (e.completion.xpAwarded ?? 0)
+                  : 0),
+              0,
+            )
+            // Kept separate from dayXp rather than netted: "+120 / -30" tells the
+            // parent what happened; a single "+90" hides the deduction entirely.
+            const dayDeducted = group.items.reduce(
+              (sum, e) => sum + (e.kind === 'deduction' ? e.deduction.applied : 0),
               0,
             )
             return (
@@ -291,18 +342,39 @@ export default function HistoryPage() {
                 <h2 className="sticky top-0 z-[1] -mx-1 flex items-center justify-between gap-2 bg-cream-100/80 px-1 py-1 backdrop-blur">
                   <span className="text-sm font-extrabold text-ink-600">
                     {group.label}
-                    <span className="ml-2 font-bold text-ink-400">{group.items.length} งาน</span>
-                  </span>
-                  {dayXp > 0 && (
-                    <span className="text-sm font-black text-xp-700">
-                      +{dayXp.toLocaleString()} XP
+                    <span className="ml-2 font-bold text-ink-400">
+                      {group.items.length} รายการ
                     </span>
-                  )}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    {dayXp > 0 && (
+                      <span className="text-sm font-black text-xp-700">
+                        +{dayXp.toLocaleString()} XP
+                      </span>
+                    )}
+                    {dayDeducted > 0 && (
+                      <span className="text-sm font-black text-danger-500">
+                        -{dayDeducted.toLocaleString()} XP
+                      </span>
+                    )}
+                  </span>
                 </h2>
                 <ol className="space-y-3">
-                  {group.items.map((entry) => (
-                    <TimelineRow key={entry.id} entry={entry} onUndo={askUndo} />
-                  ))}
+                  {group.items.map((entry) =>
+                    entry.kind === 'completion' ? (
+                      <TimelineRow
+                        key={`c-${entry.completion.id}`}
+                        entry={entry.completion}
+                        onUndo={askUndo}
+                      />
+                    ) : (
+                      <DeductionRow
+                        key={`d-${entry.deduction.id}`}
+                        deduction={entry.deduction}
+                        showChild
+                      />
+                    ),
+                  )}
                 </ol>
               </section>
             )
@@ -490,7 +562,7 @@ function TimelineSkeleton() {
 interface DayGroup {
   key: string
   label: string
-  items: Completion[]
+  items: TimelineEntry[]
 }
 
 /** The four KPI figures shown above the timeline (design S8). */
@@ -520,13 +592,13 @@ function computeStats(items: Completion[]): HistoryStats {
   }
 }
 
-/** Bucket already-sorted (desc) completions under a per-day header. */
-function groupByDay(items: Completion[]): DayGroup[] {
+/** Bucket already-sorted (desc) timeline entries under a per-day header. */
+function groupByDay(items: TimelineEntry[]): DayGroup[] {
   const groups: DayGroup[] = []
   let current: DayGroup | null = null
 
   for (const item of items) {
-    const d = new Date(item.submittedAt)
+    const d = new Date(item.at)
     const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
     if (!current || current.key !== key) {
       current = { key, label: formatDay(d), items: [] }

@@ -45,8 +45,10 @@ export function XpBadge({
         className,
       )}
     >
+      {/* A star next to "-50 XP" reads as a reward — the penalty tone gets a
+          minus instead, so an earning and a deduction never look alike. */}
       <span aria-hidden className="leading-none">
-        ⭐
+        {tone === 'penalty' ? '➖' : '⭐'}
       </span>
       {display}
       <span className="font-bold opacity-80">XP</span>
