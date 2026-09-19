@@ -1,4 +1,4 @@
--- Parent point deductions ("หักคะแนน").
+-- Parent point deductions.
 --
 -- XP had no ledger: the balance lives on user_progress and the history screens
 -- read chore_completions (earned) + reward_redemptions (spent). A parent

@@ -7,9 +7,9 @@
  * completion (approved / pending / rejected) with photo thumbnails, so a parent
  * can scroll back through what the kids did and how it was reviewed.
  *
- * หักคะแนน entries are folded into the same day groups (danger-tinted, via the
- * shared DeductionRow) — a balance that moved down has to be as findable here as
- * the chore that moved it up.
+ * Point-deduction entries are folded into the same day groups (danger-tinted,
+ * via the shared DeductionRow) — a balance that moved down has to be as
+ * findable here as the chore that moved it up.
  *
  * Client-side fetch only (the (parent)/layout already provides the desktop
  * shell + parent-only guard), so `next build` never touches Postgres.
@@ -22,7 +22,7 @@
  *   • GET /api/completions[?child=<id>] → family-scoped completions of ALL
  *     statuses (the endpoint already returns every status when `status` is
  *     omitted; we sort newest-first here per its documented caller contract).
- *   • GET /api/deductions[?child=<id>]  → หักคะแนน entries, same family scope.
+ *   • GET /api/deductions[?child=<id>]  → point-deduction entries, same family scope.
  *   • GET /api/progress?scope=weekly    → the family's children, for the filter.
  *   • POST /api/completions/:id/unapprove → undo an approval.
  *
@@ -45,6 +45,7 @@ import {
 import { DeductionRow, type Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
+import { mergeTimeline, groupByDay, type TimelineEntry as SharedTimelineEntry } from '@/lib/web/timeline'
 
 // ---- API response shapes (subset this page reads) -------------------------
 
@@ -70,9 +71,7 @@ interface DeductionsResponse {
  * The timeline mixes two record types. `at` is the single sort/group key so a
  * deduction lands in the right day next to the chores around it.
  */
-type TimelineEntry =
-  | { kind: 'completion'; at: number; completion: Completion }
-  | { kind: 'deduction'; at: number; deduction: Deduction }
+type TimelineEntry = SharedTimelineEntry<Completion, Deduction>
 interface WeeklyChild {
   userId: string
   name: string
@@ -141,11 +140,13 @@ export default function HistoryPage() {
 
     const suffix = childFilter ? `?child=${encodeURIComponent(childFilter)}` : ''
 
-    Promise.all([
-      api.get<CompletionsResponse>(`/api/completions${suffix}`),
-      api.get<DeductionsResponse>(`/api/deductions${suffix}`),
-    ])
-      .then(([comps, deds]) => {
+    // Fetched independently of deductions below: this page worked on
+    // completions alone before deductions existed, and a failure on the new
+    // /api/deductions endpoint must not blank out completions that already
+    // loaded fine.
+    api
+      .get<CompletionsResponse>(`/api/completions${suffix}`)
+      .then((comps) => {
         if (!alive) return
         // Endpoint sorts submittedAt asc; the timeline reads newest-first.
         const sorted = [...comps.completions].sort(
@@ -153,7 +154,6 @@ export default function HistoryPage() {
             new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime(),
         )
         setEntries(sorted)
-        setDeductions(deds.deductions)
         setError(null)
       })
       .catch((err) => {
@@ -164,7 +164,16 @@ export default function HistoryPage() {
             : 'โหลดประวัติไม่สำเร็จ ลองรีเฟรชอีกครั้ง',
         )
         setEntries([])
-        setDeductions([])
+      })
+
+    api
+      .get<DeductionsResponse>(`/api/deductions${suffix}`)
+      .then((deds) => {
+        if (alive) setDeductions(deds.deductions)
+      })
+      .catch(() => {
+        // Non-fatal: the chore timeline still works without deduction rows.
+        if (alive) setDeductions([])
       })
 
     return () => {
@@ -238,18 +247,12 @@ export default function HistoryPage() {
   // Merge both record kinds onto one axis, newest-first, then group by day.
   const timeline = useMemo<TimelineEntry[]>(
     () =>
-      [
-        ...(entries ?? []).map<TimelineEntry>((c) => ({
-          kind: 'completion',
-          at: new Date(c.submittedAt).getTime(),
-          completion: c,
-        })),
-        ...(deductions ?? []).map<TimelineEntry>((d) => ({
-          kind: 'deduction',
-          at: new Date(d.createdAt).getTime(),
-          deduction: d,
-        })),
-      ].sort((a, b) => b.at - a.at),
+      mergeTimeline(
+        entries ?? [],
+        deductions ?? [],
+        (c) => new Date(c.submittedAt).getTime(),
+        (d) => new Date(d.createdAt).getTime(),
+      ),
     [entries, deductions],
   )
 
@@ -257,8 +260,9 @@ export default function HistoryPage() {
   const groups = useMemo(() => groupByDay(timeline), [timeline])
 
   // Four KPI stat cards (design S8): งานเดือนนี้ / XP รวม / อัตราตรงเวลา / รูป.
-  // Deliberately still chore-only — "XP เดือนนี้" is what the kids EARNED, and
-  // netting deductions into it would quietly change what an existing card means.
+  // Deliberately still chore-only — the "XP เดือนนี้" card is what the kids
+  // EARNED, and netting deductions into it would quietly change what an
+  // existing card means.
   const stats = useMemo(() => computeStats(entries ?? []), [entries])
 
   const loading = (entries === null || deductions === null) && error === null
@@ -559,12 +563,6 @@ function TimelineSkeleton() {
 
 // ---- Grouping + formatting helpers ----------------------------------------
 
-interface DayGroup {
-  key: string
-  label: string
-  items: TimelineEntry[]
-}
-
 /** The four KPI figures shown above the timeline (design S8). */
 interface HistoryStats {
   monthCount: number
@@ -592,50 +590,10 @@ function computeStats(items: Completion[]): HistoryStats {
   }
 }
 
-/** Bucket already-sorted (desc) timeline entries under a per-day header. */
-function groupByDay(items: TimelineEntry[]): DayGroup[] {
-  const groups: DayGroup[] = []
-  let current: DayGroup | null = null
-
-  for (const item of items) {
-    const d = new Date(item.at)
-    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
-    if (!current || current.key !== key) {
-      current = { key, label: formatDay(d), items: [] }
-      groups.push(current)
-    }
-    current.items.push(item)
-  }
-  return groups
-}
-
-const DAY_FMT = new Intl.DateTimeFormat('th-TH', {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-})
 const TIME_FMT = new Intl.DateTimeFormat('th-TH', {
   hour: '2-digit',
   minute: '2-digit',
 })
-
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  )
-}
-
-function formatDay(d: Date): string {
-  const now = new Date()
-  if (isSameDay(d, now)) return 'วันนี้'
-  const yesterday = new Date(now)
-  yesterday.setDate(now.getDate() - 1)
-  if (isSameDay(d, yesterday)) return 'เมื่อวาน'
-  return DAY_FMT.format(d)
-}
 
 function formatTime(iso: string): string {
   return `${TIME_FMT.format(new Date(iso))} น.`

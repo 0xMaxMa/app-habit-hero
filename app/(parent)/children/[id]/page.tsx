@@ -18,7 +18,7 @@
  *   • GET /api/badges?user=<id>          → full earned/locked wall
  *   • GET /api/chores/today?child=<id>   → still-pending chores today
  *   • GET /api/completions?child=<id>    → activity timeline + this-week strip
- *   • GET /api/deductions?child=<id>     → หักคะแนน entries for the timeline
+ *   • GET /api/deductions?child=<id>     → point-deduction entries for the timeline
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -38,7 +38,8 @@ import { DeductPointsCard, type DeductionResult } from '@/components/DeductPoint
 import type { Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
-import { levelInfo } from '@/lib/level'
+import { levelInfo, rankName } from '@/lib/level'
+import { mergeTimeline } from '@/lib/web/timeline'
 
 // ---- API shapes (subset) --------------------------------------------------
 
@@ -85,15 +86,6 @@ interface CompletionsResponse {
 interface DeductionsResponse {
   deductions: Deduction[]
 }
-
-/**
- * The timeline mixes two record types. `at` is the sort key so both kinds are
- * ordered on one axis (a completion by when it was submitted, a deduction by
- * when the parent made it).
- */
-type TimelineEntry =
-  | { kind: 'completion'; at: number; completion: Completion }
-  | { kind: 'deduction'; at: number; deduction: Deduction }
 
 // ---- Date helpers (local calendar) ----------------------------------------
 
@@ -153,25 +145,34 @@ export default function ChildProfilePage() {
     background.current = false
     async function load() {
       try {
-        const [p, b, t, c, d] = await Promise.all([
+        const [p, b, t, c] = await Promise.all([
           api.get<ProgressResponse>(`/api/progress?user=${encodeURIComponent(childId)}`),
           api.get<BadgesResponse>(`/api/badges?user=${encodeURIComponent(childId)}`),
           api.get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(childId)}`),
           api.get<CompletionsResponse>(`/api/completions?child=${encodeURIComponent(childId)}`),
-          api.get<DeductionsResponse>(`/api/deductions?child=${encodeURIComponent(childId)}`),
         ])
         if (!alive) return
         setProgress(p)
         setBadges(b)
         setToday(t)
         setCompletions(c.completions)
-        setDeductions(d.deductions)
         setError(null)
       } catch (err) {
         if (!alive || silent) return
         setError(
           err instanceof ApiError ? err.message : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้ง',
         )
+      }
+
+      // Fetched independently: a failure here must not block the rest of the
+      // profile (hero card, badges, this-week, today's chores) from rendering.
+      try {
+        const d = await api.get<DeductionsResponse>(
+          `/api/deductions?child=${encodeURIComponent(childId)}`,
+        )
+        if (alive) setDeductions(d.deductions)
+      } catch {
+        if (alive) setDeductions([])
       }
     }
     load()
@@ -194,7 +195,11 @@ export default function ChildProfilePage() {
   /** A deduction just landed: reflect it immediately, then reconcile silently. */
   function onDeducted(res: DeductionResult) {
     setDeductions((prev) => (prev ? [res.deduction, ...prev] : [res.deduction]))
-    setProgress((prev) => (prev ? { ...prev, xp: res.xp, level: res.level, xpToNext: res.xpToNext } : prev))
+    setProgress((prev) =>
+      prev
+        ? { ...prev, xp: res.xp, level: res.level, xpToNext: res.xpToNext, rank: rankName(res.level) }
+        : prev,
+    )
     setToast(
       `หัก ${res.applied.toLocaleString()} XP แล้ว` +
         (res.floored && res.applied < res.requested
@@ -232,18 +237,12 @@ export default function ChildProfilePage() {
   const totalDone = completions.filter((c) => c.status === 'approved').length
 
   // Newest-first timeline of both record kinds on one axis.
-  const timeline: TimelineEntry[] = [
-    ...completions.map<TimelineEntry>((c) => ({
-      kind: 'completion',
-      at: new Date(c.submittedAt).getTime(),
-      completion: c,
-    })),
-    ...deductions.map<TimelineEntry>((d) => ({
-      kind: 'deduction',
-      at: new Date(d.createdAt).getTime(),
-      deduction: d,
-    })),
-  ].sort((a, b) => b.at - a.at)
+  const timeline = mergeTimeline(
+    completions,
+    deductions,
+    (c) => new Date(c.submittedAt).getTime(),
+    (d) => new Date(d.createdAt).getTime(),
+  )
 
   // "This week" — one cell per weekday (Mon–Sun).
   const monday = mondayOfWeek(new Date())
@@ -450,7 +449,7 @@ export default function ChildProfilePage() {
             </div>
           </Card>
 
-          {/* หักคะแนน — last in the column: rarely used, and it takes XP away. */}
+          {/* Point deduction — last in the column: rarely used, and it takes XP away. */}
           <DeductPointsCard
             childId={childId}
             childName={progress.name}
@@ -518,9 +517,10 @@ function CompletionTimelineBody({ completion }: { completion: Completion }) {
 }
 
 /**
- * A หักคะแนน row. Same rail as a completion, but danger-tinted and it leads with
- * the reason — on this page the parent already knows they did it; what matters
- * when scrolling back is WHY. (The list pages use the fuller `DeductionRow`.)
+ * A point-deduction row. Same rail as a completion, but danger-tinted and it
+ * leads with the reason — on this page the parent already knows they did it;
+ * what matters when scrolling back is WHY. (The list pages use the fuller
+ * `DeductionRow`.)
  */
 function DeductionTimelineBody({ deduction }: { deduction: Deduction }) {
   return (

@@ -1,6 +1,6 @@
 /**
- * components/DeductionRow.tsx — one "หักคะแนน" entry, shared by every history
- * surface (parent timeline, parent child-profile, child "งานของฉัน").
+ * components/DeductionRow.tsx — one point-deduction entry, shared by every
+ * history surface (parent timeline, parent child-profile, child's own tasks page).
  *
  * A deduction has to read differently from a completion at a glance: chore rows
  * are cream with an amber +XP pill, so these are danger-tinted with a ➖ icon
@@ -32,7 +32,7 @@ export function DeductionRow({
   showChild = false,
   /** Say who did it. Off on the parent's own child-profile page (always them). */
   showBy = true,
-  /** Address the reader as the child ("พ่อแม่หักคะแนน") instead of reporting it. */
+  /** Address the reader as the child ("Mom deducted your points") instead of reporting it. */
   kidVoice = false,
 }: {
   deduction: Deduction

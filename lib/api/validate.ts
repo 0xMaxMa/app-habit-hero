@@ -3,7 +3,11 @@
  *
  * On failure these throw ApiError badRequest carrying the zod `issues`, which
  * `withHandler` surfaces in the failure envelope. Handlers get a fully typed,
- * validated value or an early throw — never a half-checked body.
+ * validated value or an early throw — never a half-checked body. The
+ * top-level message is the first issue's own message when the schema gave
+ * one (schemas write these to be shown to a caller/end user, e.g.
+ * app/api/deductions/route.ts), so a caller that only reads `error.message`
+ * still gets something actionable instead of the generic fallback below.
  */
 
 import type { z } from 'zod'
@@ -23,7 +27,9 @@ export async function parseBody<T extends z.ZodTypeAny>(
 
   const result = schema.safeParse(raw)
   if (!result.success) {
-    throw badRequest('Invalid request body', { issues: result.error.issues })
+    throw badRequest(result.error.issues[0]?.message ?? 'Invalid request body', {
+      issues: result.error.issues,
+    })
   }
   return result.data
 }
@@ -39,7 +45,9 @@ export function parseQuery<T extends z.ZodTypeAny>(
 
   const result = schema.safeParse(raw)
   if (!result.success) {
-    throw badRequest('Invalid query parameters', { issues: result.error.issues })
+    throw badRequest(result.error.issues[0]?.message ?? 'Invalid query parameters', {
+      issues: result.error.issues,
+    })
   }
   return result.data
 }

@@ -1,5 +1,5 @@
 # /deduct
-Parent deducts XP from a child ("หักคะแนน").
+Parent deducts XP from a child (point deduction).
 
 **Usage:** `/deduct <child> <amount> <reason>`
 

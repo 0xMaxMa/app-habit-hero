@@ -271,7 +271,7 @@ model UserProgress {
 }
 
 /// A parent-initiated XP change that is not a chore and not a reward — today
-/// only the deduction ("หักคะแนน") the parent UI writes.
+/// only the point deduction the parent UI writes.
 ///
 /// XP has no ledger: a balance lives on UserProgress and the history screens are
 /// built from ChoreCompletion (earned) + RewardRedemption (spent). A deduction

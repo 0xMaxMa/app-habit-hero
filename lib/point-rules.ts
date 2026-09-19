@@ -23,7 +23,7 @@ export type CompletionOutcome = 'on_time' | 'late' | 'miss'
  * straight onto a child's balance — a stray keypress ("500" → "5000") would
  * otherwise wipe out weeks of work in one tap, and the floor at 0 hides how far
  * past the balance the request went. 1,000 XP is ~10 of the biggest everyday
- * chores (100 XP), so it comfortably covers any real "หักคะแนน" while still
+ * chores (100 XP), so it comfortably covers any real deduction while still
  * catching a typo. Bigger corrections are deliberately several explicit steps.
  */
 export const MAX_DEDUCTION_XP = 1000

@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
 
 /**
- * tests/e2e/deduction.spec.ts — web E2E for parent "หักคะแนน" (point deduction).
+ * tests/e2e/deduction.spec.ts — web E2E for parent point deduction.
  *
  * Proves the three surfaces the feature spans actually work in a browser, not
  * just the API (that is covered by tests/integration/deductions.test.ts):
@@ -60,7 +60,7 @@ async function loginAsParent(page: Page): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
-test.describe.serial('Parent point deduction (หักคะแนน)', () => {
+test.describe.serial('Parent point deduction', () => {
   test('W-DEDUCT-1: parent deducts XP from the child profile → confirm, toast, timeline row, XP down', async ({
     page,
     request,
@@ -122,7 +122,8 @@ test.describe.serial('Parent point deduction (หักคะแนน)', () => 
     await expect(row).toContainText('หักคะแนน')
     // Family-wide timeline → the row says which child it was.
     await expect(row).toContainText(CHILD_B.name)
-    await expect(row).toContainText(`-${AMOUNT}`)
+    // The ➖ icon carries the sign; the XpBadge itself prints the magnitude.
+    await expect(row).toContainText(String(AMOUNT))
   })
 
   test('W-DEDUCT-3: the CHILD sees the deduction and its reason in their own history', async ({
@@ -142,6 +143,7 @@ test.describe.serial('Parent point deduction (หักคะแนน)', () => 
     const row = page.getByRole('listitem').filter({ hasText: REASON }).first()
     await expect(row).toBeVisible()
     await expect(row).toContainText('หักคะแนน')
-    await expect(row).toContainText(`-${AMOUNT}`)
+    // The ➖ icon carries the sign; the XpBadge itself prints the magnitude.
+    await expect(row).toContainText(String(AMOUNT))
   })
 })

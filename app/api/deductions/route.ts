@@ -1,5 +1,5 @@
 /**
- * app/api/deductions/route.ts — parent deducts XP from a child ("หักคะแนน").
+ * app/api/deductions/route.ts — parent deducts XP from a child (point deduction).
  *
  * POST /api/deductions  { user, amount, reason }
  *   Parent-only, family-scoped, children only. Takes `amount` XP off the child's
@@ -51,7 +51,7 @@ export const dynamic = 'force-dynamic'
 const bodySchema = z.object({
   user: z.string().min(1),
   // A positive whole number: the route negates it. Letting a caller pass the
-  // sign would make "หัก -50" quietly hand out XP through the deduct endpoint.
+  // sign would make "deduct -50" quietly hand out XP through the deduct endpoint.
   amount: z
     .number({ invalid_type_error: 'จำนวนคะแนนต้องเป็นตัวเลข' })
     .int('จำนวนคะแนนต้องเป็นจำนวนเต็ม')

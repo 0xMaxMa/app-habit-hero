@@ -1,5 +1,5 @@
 /**
- * tests/integration/deductions.test.ts — parent point deduction ("หักคะแนน").
+ * tests/integration/deductions.test.ts — parent point deduction.
  *
  * Direct route-handler import (no server boot) against the real test Postgres,
  * asserting on the PERSISTED result: the child's balance, and the

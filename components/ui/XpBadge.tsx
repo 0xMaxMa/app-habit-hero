@@ -35,7 +35,10 @@ export function XpBadge({
   className,
 }: XpBadgeProps) {
   const sign = showSign && value > 0 ? '+' : ''
-  const display = `${sign}${value.toLocaleString()}`
+  // The ➖ icon already signals "penalty" — printing the numeric sign too would
+  // double up as "➖ -50 XP". Show the magnitude; the icon carries the sign.
+  const display =
+    tone === 'penalty' ? Math.abs(value).toLocaleString() : `${sign}${value.toLocaleString()}`
   return (
     <span
       className={cn(
