@@ -27,6 +27,7 @@ import { useParams } from 'next/navigation'
 import {
   Avatar,
   BadgeChip,
+  Button,
   Card,
   PhotoThumb,
   ProgressBar,
@@ -124,6 +125,8 @@ function completionStatus(c: Completion): { chip: ChoreStatus; meta: string } {
 
 // ---------------------------------------------------------------------------
 
+const TIMELINE_PAGE_SIZE = 15
+
 export default function ChildProfilePage() {
   const params = useParams<{ id: string }>()
   const childId = params.id
@@ -138,6 +141,13 @@ export default function ChildProfilePage() {
   // Bumping this key re-runs the loader; `background` marks a silent refresh.
   const [reloadKey, setReloadKey] = useState(0)
   const background = useRef(false)
+  const [timelineShown, setTimelineShown] = useState(TIMELINE_PAGE_SIZE)
+
+  // Switching to a different child's profile (no remount — same route) should
+  // not carry over how far the previous child's timeline was expanded.
+  useEffect(() => {
+    setTimelineShown(TIMELINE_PAGE_SIZE)
+  }, [childId])
 
   useEffect(() => {
     let alive = true
@@ -243,6 +253,8 @@ export default function ChildProfilePage() {
     (c) => new Date(c.submittedAt).getTime(),
     (d) => new Date(d.createdAt).getTime(),
   )
+  const visibleTimeline = timeline.slice(0, timelineShown)
+  const hasMoreTimeline = timeline.length > visibleTimeline.length
 
   // "This week" — one cell per weekday (Mon–Sun).
   const monday = mondayOfWeek(new Date())
@@ -365,62 +377,9 @@ export default function ChildProfilePage() {
             </div>
           </Card>
 
-          {/* Activity timeline */}
-          <Card>
-            <h3 className="mb-4 text-lg font-black text-ink-900">ไทม์ไลน์กิจกรรม</h3>
-            {timeline.length === 0 ? (
-              <p className="text-sm font-semibold text-ink-500">ยังไม่มีกิจกรรม</p>
-            ) : (
-              <ul className="space-y-0">
-                {timeline.map((entry, i) => (
-                  <li
-                    key={`${entry.kind}-${entry.kind === 'completion' ? entry.completion.id : entry.deduction.id}`}
-                    className="flex gap-3.5 pb-4 last:pb-0"
-                  >
-                    {/* dot + connector */}
-                    <div className="flex flex-col items-center gap-1">
-                      <span
-                        className={cn(
-                          'grid h-7 w-7 shrink-0 place-items-center rounded-pill text-xs font-black',
-                          entry.kind === 'deduction'
-                            ? 'bg-danger-100 text-danger-500'
-                            : entry.completion.status === 'approved'
-                              ? 'bg-success-100 text-success-500'
-                              : entry.completion.status === 'rejected'
-                                ? 'bg-danger-100 text-danger-500'
-                                : 'bg-cream-300 text-ink-500',
-                        )}
-                      >
-                        {entry.kind === 'deduction'
-                          ? '➖'
-                          : entry.completion.status === 'approved'
-                            ? '✓'
-                            : entry.completion.status === 'rejected'
-                              ? '✕'
-                              : '⏳'}
-                      </span>
-                      {i < timeline.length - 1 && <span className="w-0.5 flex-1 bg-cream-500" />}
-                    </div>
-                    {/* body — min-w-0 so the row can shrink below the title's
-                        width. Without it this flex item keeps min-width:auto,
-                        and `truncate` (white-space:nowrap) makes its
-                        min-content the WHOLE title, pushing the card, the main
-                        column and the page wider than the phone. */}
-                    {entry.kind === 'deduction' ? (
-                      <DeductionTimelineBody deduction={entry.deduction} />
-                    ) : (
-                      <CompletionTimelineBody completion={entry.completion} />
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        </div>
-
-        {/* ---- Right column ---- */}
-        <div className="min-w-0 space-y-5">
-          {/* This week */}
+          {/* This week — the daily green/red activity strip, kept above the
+              timeline so a glance at "did they show up today" never requires
+              scrolling past the (potentially long) activity history. */}
           <Card>
             <h3 className="text-base font-black text-ink-900">สัปดาห์นี้</h3>
             <div className="mt-4 grid grid-cols-7 gap-2">
@@ -449,7 +408,81 @@ export default function ChildProfilePage() {
             </div>
           </Card>
 
-          {/* Point deduction — last in the column: rarely used, and it takes XP away. */}
+          {/* Activity timeline — capped at TIMELINE_PAGE_SIZE entries per page
+              and grown with "โหลดเพิ่มเติม" so a long history never forces the
+              whole page (including the point-deduction card below it) behind
+              an endless scroll. */}
+          <Card>
+            <h3 className="mb-4 text-lg font-black text-ink-900">ไทม์ไลน์กิจกรรม</h3>
+            {timeline.length === 0 ? (
+              <p className="text-sm font-semibold text-ink-500">ยังไม่มีกิจกรรม</p>
+            ) : (
+              <>
+                <ul className="space-y-0">
+                  {visibleTimeline.map((entry, i) => (
+                    <li
+                      key={`${entry.kind}-${entry.kind === 'completion' ? entry.completion.id : entry.deduction.id}`}
+                      className="flex gap-3.5 pb-4 last:pb-0"
+                    >
+                      {/* dot + connector */}
+                      <div className="flex flex-col items-center gap-1">
+                        <span
+                          className={cn(
+                            'grid h-7 w-7 shrink-0 place-items-center rounded-pill text-xs font-black',
+                            entry.kind === 'deduction'
+                              ? 'bg-danger-100 text-danger-500'
+                              : entry.completion.status === 'approved'
+                                ? 'bg-success-100 text-success-500'
+                                : entry.completion.status === 'rejected'
+                                  ? 'bg-danger-100 text-danger-500'
+                                  : 'bg-cream-300 text-ink-500',
+                          )}
+                        >
+                          {entry.kind === 'deduction'
+                            ? '➖'
+                            : entry.completion.status === 'approved'
+                              ? '✓'
+                              : entry.completion.status === 'rejected'
+                                ? '✕'
+                                : '⏳'}
+                        </span>
+                        {i < visibleTimeline.length - 1 && (
+                          <span className="w-0.5 flex-1 bg-cream-500" />
+                        )}
+                      </div>
+                      {/* body — min-w-0 so the row can shrink below the title's
+                          width. Without it this flex item keeps min-width:auto,
+                          and `truncate` (white-space:nowrap) makes its
+                          min-content the WHOLE title, pushing the card, the main
+                          column and the page wider than the phone. */}
+                      {entry.kind === 'deduction' ? (
+                        <DeductionTimelineBody deduction={entry.deduction} />
+                      ) : (
+                        <CompletionTimelineBody completion={entry.completion} />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {hasMoreTimeline && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    fullWidth
+                    className="mt-2"
+                    onClick={() => setTimelineShown((n) => n + TIMELINE_PAGE_SIZE)}
+                  >
+                    โหลดเพิ่มเติม
+                  </Button>
+                )}
+              </>
+            )}
+          </Card>
+        </div>
+
+        {/* ---- Right column ---- */}
+        <div className="min-w-0 space-y-5">
+          {/* Point deduction — kept in place: rarely used, and it takes XP away. */}
           <DeductPointsCard
             childId={childId}
             childName={progress.name}
