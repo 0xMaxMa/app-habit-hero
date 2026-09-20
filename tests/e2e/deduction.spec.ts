@@ -13,11 +13,15 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
  * Also covers undoing that same deduction (POST /api/deductions/:id/cancel,
  * tests/integration/deductions-cancel.test.ts has the API-level cases —
  * restore-on-floor, idempotent 409, cross-family 403, the concurrent-cancel
- * race) across the same three surfaces:
- *   - the "ยกเลิก" button + confirm dialog on the child profile page, and the
- *     hero XP figure updating immediately on confirm
- *   - the row reading "ยกเลิกแล้ว" with no cancel control left, on BOTH the
- *     parent history page and the child's own tasks page
+ * race). Cancelling is ONLY offered on the parent history page — every other
+ * surface (the "ไทม์ไลน์กิจกรรม" widget on the child profile page, and the
+ * child's own tasks page) renders the row read-only, active or cancelled:
+ *   - the "ยกเลิก" button + confirm dialog on the history page
+ *   - the row reading "ยกเลิกแล้ว" with no cancel control anywhere else, on
+ *     BOTH the child profile timeline and the child's own tasks page — and
+ *     the child profile's hero XP figure reflecting the restore on its next
+ *     fetch (a plain refetch, not a live cross-page update — there is no
+ *     button there to trigger one)
  *
  * Fixtures come from prisma/seed.test.ts. This file uses น้องบี (600 XP) and is
  * the only spec that writes that child's XP (approval-history.spec.ts only
@@ -114,6 +118,9 @@ test.describe.serial('Parent point deduction', () => {
     const row = page.getByRole('listitem').filter({ hasText: REASON }).first()
     await expect(row).toBeVisible()
     await expect(row).toContainText('หักคะแนน')
+    // The "ไทม์ไลน์กิจกรรม" widget is read-only, like every other row in it —
+    // cancelling only lives on the history page.
+    await expect(row.getByRole('button', { name: 'ยกเลิก' })).toHaveCount(0)
 
     // API: the balance really moved, and the ledger row explains it.
     expect(await getChildXp(request, CHILD_B.id)).toBe(xpBefore - AMOUNT)
@@ -137,6 +144,8 @@ test.describe.serial('Parent point deduction', () => {
     await expect(row).toContainText(CHILD_B.name)
     // The ➖ icon carries the sign; the XpBadge itself prints the magnitude.
     await expect(row).toContainText(String(AMOUNT))
+    // The history page is the only surface offering the cancel action.
+    await expect(row.getByRole('button', { name: 'ยกเลิก' })).toBeVisible()
   })
 
   test('W-DEDUCT-3: the CHILD sees the deduction and its reason in their own history', async ({
@@ -158,15 +167,17 @@ test.describe.serial('Parent point deduction', () => {
     await expect(row).toContainText('หักคะแนน')
     // The ➖ icon carries the sign; the XpBadge itself prints the magnitude.
     await expect(row).toContainText(String(AMOUNT))
+    // A kid must never be offered the cancel action.
+    await expect(row.getByRole('button', { name: 'ยกเลิก' })).toHaveCount(0)
   })
 
-  test('W-DEDUCT-4: parent cancels the deduction from the child profile page → confirm, toast, XP restored', async ({
+  test('W-DEDUCT-4: parent cancels the deduction from the history page → confirm, toast, XP restored', async ({
     page,
     request,
   }) => {
     await loginAsParent(page)
-    await page.goto(`/children/${CHILD_B.id}`)
-    await expect(page.getByRole('heading', { name: new RegExp(CHILD_B.name) }).first()).toBeVisible()
+    await page.goto('/history')
+    await expect(page.getByRole('heading', { name: 'ประวัติงานบ้าน' })).toBeVisible()
 
     const xpBefore = await getChildXp(request, CHILD_B.id)
 
@@ -191,12 +202,22 @@ test.describe.serial('Parent point deduction', () => {
     expect(mine?.cancelledAt, 'the deduction is marked cancelled').toBeTruthy()
   })
 
-  test('W-DEDUCT-5: the parent history timeline shows the deduction as cancelled, with no cancel control left', async ({
+  test('W-DEDUCT-5: the child profile timeline picks up the cancel on its next fetch — read-only, XP restored', async ({
     page,
+    request,
   }) => {
+    // The child profile's "ไทม์ไลน์กิจกรรม" widget has no cancel button of its
+    // own (W-DEDUCT-1), so there is nothing there to trigger a live update —
+    // a plain page load/refetch is what has to pick up the cancel made in
+    // W-DEDUCT-4 from the history page.
+    const xp = await getChildXp(request, CHILD_B.id)
+
     await loginAsParent(page)
-    await page.goto('/history')
-    await expect(page.getByRole('heading', { name: 'ประวัติงานบ้าน' })).toBeVisible()
+    await page.goto(`/children/${CHILD_B.id}`)
+    await expect(page.getByRole('heading', { name: new RegExp(CHILD_B.name) }).first()).toBeVisible()
+
+    // Hero XP figure reflects the restored balance on this fresh fetch.
+    await expect(page.getByText(`XP สะสม ${xp.toLocaleString()}`)).toBeVisible()
 
     const row = page.getByRole('listitem').filter({ hasText: REASON }).first()
     await expect(row).toBeVisible()
@@ -257,12 +278,18 @@ test.describe.serial('Parent point deduction', () => {
     await expect(row).toContainText(`คะแนนไม่พอ หักได้ ${xpBefore.toLocaleString()} XP`)
     await expect(row).toContainText(String(xpBefore))
     await expect(row).not.toContainText(String(REQUESTED))
+    // Still read-only here — cancelling only happens from the history page.
+    await expect(row.getByRole('button', { name: 'ยกเลิก' })).toHaveCount(0)
 
     expect(await getChildXp(request, CHILD_B.id)).toBe(0)
 
-    // Clean up: cancel it so this test leaves น้องบี's balance exactly as it
-    // found it, whatever future tests land after this one.
-    await row.getByRole('button', { name: 'ยกเลิก' }).click()
+    // Clean up via the history page (the only surface with the cancel action)
+    // so this test leaves น้องบี's balance exactly as it found it, whatever
+    // future tests land after this one.
+    await page.goto('/history')
+    const historyRow = page.getByRole('listitem').filter({ hasText: FLOOR_REASON }).first()
+    await expect(historyRow).toBeVisible()
+    await historyRow.getByRole('button', { name: 'ยกเลิก' }).click()
     const cancelDialog = page.getByRole('dialog', { name: 'ยกเลิกการหักคะแนน?' })
     await expect(cancelDialog).toBeVisible()
     await cancelDialog.getByRole('button', { name: 'ยกเลิก' }).click()
