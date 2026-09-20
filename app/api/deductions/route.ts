@@ -45,6 +45,7 @@ import { addXp } from '@/lib/xp'
 import { levelForXp, xpToNextLevel } from '@/lib/level'
 import { MAX_DEDUCTION_XP } from '@/lib/point-rules'
 import { systemClock } from '@/lib/clock'
+import { dtoInclude, toDeductionDto } from '@/lib/api/deduction-dto'
 
 export const dynamic = 'force-dynamic'
 
@@ -68,34 +69,6 @@ const bodySchema = z.object({
 const getQuery = z.object({
   child: z.string().min(1).optional(),
 })
-
-/** Shape one PointAdjustment row for the history timelines. */
-function toDeductionDto(row: {
-  id: string
-  xpDelta: number
-  xpApplied: number
-  reason: string
-  createdAt: Date
-  user: { id: string; name: string; avatarUrl: string | null }
-  creator: { id: string; name: string } | null
-}) {
-  return {
-    id: row.id,
-    // Positive XP taken off, which is what every screen shows ("-50 XP").
-    amount: -row.xpDelta,
-    applied: row.xpApplied,
-    reason: row.reason,
-    createdAt: row.createdAt,
-    child: row.user,
-    // Null once the parent who did it has been removed from the family.
-    by: row.creator,
-  }
-}
-
-const dtoInclude = {
-  user: { select: { id: true, name: true, avatarUrl: true } },
-  creator: { select: { id: true, name: true } },
-} as const
 
 // ---------------------------------------------------------------------------
 // POST — deduct XP from one child.

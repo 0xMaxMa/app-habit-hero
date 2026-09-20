@@ -16,7 +16,9 @@
  *
  * Approved rows carry an "ยกเลิกอนุมัติ" action — the only place in the app a
  * parent can walk an approval back (XP clawed back, badges revoked, the chore
- * returned to the review queue with its photo intact).
+ * returned to the review queue with its photo intact). Deduction rows carry
+ * their own "ยกเลิก" (DeductionRow's `onCancel`) — undoes just that deduction,
+ * no time limit, restores the XP it actually took.
  *
  * Data:
  *   • GET /api/completions[?child=<id>] → family-scoped completions of ALL
@@ -25,6 +27,7 @@
  *   • GET /api/deductions[?child=<id>]  → point-deduction entries, same family scope.
  *   • GET /api/progress?scope=weekly    → the family's children, for the filter.
  *   • POST /api/completions/:id/unapprove → undo an approval.
+ *   • POST /api/deductions/:id/cancel     → undo a deduction.
  *
  * Photos are served by GET /api/photos/<file>; `photoUrl` is already stored as
  * that full path, so we only prefix the app base path for the <img src>.
@@ -85,6 +88,10 @@ interface UnapproveResponse {
   progress: { totalXp: number; level: number; previousLevel: number; leveledDown: boolean }
   revokedBadges: { id: string; name: string; emoji: string }[]
 }
+interface CancelDeductionResponse {
+  deduction: Deduction
+  restored: number
+}
 
 // Completion status → StatusChip status (StatusChip has no "approved").
 const STATUS_CHIP: Record<Completion['status'], ChoreStatus> = {
@@ -109,6 +116,10 @@ export default function HistoryPage() {
   const [undoTarget, setUndoTarget] = useState<Completion | null>(null)
   const [undoBusy, setUndoBusy] = useState(false)
   const [undoError, setUndoError] = useState<string | null>(null)
+  // Cancel-deduction: same shape, its own dialog.
+  const [cancelTarget, setCancelTarget] = useState<Deduction | null>(null)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [cancelError, setCancelError] = useState<string | null>(null)
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
 
   // Load the children list once (drives the filter dropdown).
@@ -244,6 +255,42 @@ export default function HistoryPage() {
     }
   }
 
+  // ---- Cancel a deduction --------------------------------------------------
+
+  const askCancel = useCallback((entry: Deduction) => {
+    setCancelError(null)
+    setCancelTarget(entry)
+  }, [])
+
+  async function confirmCancel() {
+    if (!cancelTarget) return
+    const entry = cancelTarget
+    setCancelBusy(true)
+    setCancelError(null)
+    try {
+      const res = await api.post<CancelDeductionResponse>(`/api/deductions/${entry.id}/cancel`)
+      // Patch the row in place so the change is visible immediately, then let a
+      // silent refetch reconcile with the server.
+      setDeductions((prev) =>
+        prev ? prev.map((d) => (d.id === entry.id ? res.deduction : d)) : prev,
+      )
+      setCancelTarget(null)
+      background.current = true
+      setReloadKey((k) => k + 1)
+
+      setToast({
+        kind: 'success',
+        text: `ยกเลิกการหักคะแนนของ${entry.child.name}แล้ว — คืน ${res.restored.toLocaleString()} XP`,
+      })
+    } catch (err) {
+      setCancelError(
+        err instanceof ApiError ? err.message : 'ยกเลิกไม่สำเร็จ ลองใหม่อีกครั้ง',
+      )
+    } finally {
+      setCancelBusy(false)
+    }
+  }
+
   // Merge both record kinds onto one axis, newest-first, then group by day.
   const timeline = useMemo<TimelineEntry[]>(
     () =>
@@ -337,8 +384,11 @@ export default function HistoryPage() {
             )
             // Kept separate from dayXp rather than netted: "+120 / -30" tells the
             // parent what happened; a single "+90" hides the deduction entirely.
+            // Cancelled deductions are excluded — the XP they took is back, so
+            // they no longer belong in a total of what left the balance that day.
             const dayDeducted = group.items.reduce(
-              (sum, e) => sum + (e.kind === 'deduction' ? e.deduction.applied : 0),
+              (sum, e) =>
+                sum + (e.kind === 'deduction' && !e.deduction.cancelledAt ? e.deduction.applied : 0),
               0,
             )
             return (
@@ -376,6 +426,7 @@ export default function HistoryPage() {
                         key={`d-${entry.deduction.id}`}
                         deduction={entry.deduction}
                         showChild
+                        onCancel={askCancel}
                       />
                     ),
                   )}
@@ -416,6 +467,33 @@ export default function HistoryPage() {
           <li className="text-ink-500">
             ถ้าเป็นงานเดียวที่อนุมัติของวันนั้น วันนั้นจะไม่ถูกนับในสตรีคอีก
           </li>
+        </ul>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={cancelTarget !== null}
+        title="ยกเลิกการหักคะแนน?"
+        icon="➖"
+        tone="danger"
+        confirmLabel="ยกเลิก"
+        cancelLabel="ไม่ใช่ตอนนี้"
+        busy={cancelBusy}
+        error={cancelError}
+        message={
+          cancelTarget
+            ? `${cancelTarget.child.name} จะได้ ${cancelTarget.applied.toLocaleString()} XP คืน`
+            : undefined
+        }
+        onConfirm={confirmCancel}
+        onCancel={() => {
+          if (cancelBusy) return
+          setCancelTarget(null)
+          setCancelError(null)
+        }}
+      >
+        <ul className="list-disc space-y-1 pl-5 text-sm font-semibold text-ink-600 marker:text-ink-400">
+          <li>เหตุผลเดิม: “{cancelTarget?.reason}”</li>
+          <li className="text-ink-500">รายการนี้จะยังอยู่ในประวัติ พร้อมป้าย “ยกเลิกแล้ว”</li>
         </ul>
       </ConfirmDialog>
 

@@ -10,12 +10,21 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
  *   - app/(parent)/history/page.tsx  → the entry in the family timeline
  *   - app/(child)/child/tasks/ChildTasks.tsx → the CHILD sees it, with the reason
  *
+ * Also covers undoing that same deduction (POST /api/deductions/:id/cancel,
+ * tests/integration/deductions-cancel.test.ts has the API-level cases —
+ * restore-on-floor, idempotent 409, cross-family 403, the concurrent-cancel
+ * race) across the same three surfaces:
+ *   - the "ยกเลิก" button + confirm dialog on the child profile page, and the
+ *     hero XP figure updating immediately on confirm
+ *   - the row reading "ยกเลิกแล้ว" with no cancel control left, on BOTH the
+ *     parent history page and the child's own tasks page
+ *
  * Fixtures come from prisma/seed.test.ts. This file uses น้องบี (600 XP) so the
  * deduction never hits the zero floor, and it is the only spec that writes that
  * child's XP (approval-history.spec.ts only creates a pending row for them).
  *
- * The three cases run in ORDER (serial): the deduction made in W-DEDUCT-1 is
- * what the other two read back.
+ * The cases run in ORDER (serial): the deduction made in W-DEDUCT-1 is what
+ * the rest read back, and the cancel in W-DEDUCT-4 is what W-DEDUCT-5/6 read back.
  */
 
 // --- Seeded fixture values (prisma/seed.test.ts — single source of truth) ---
@@ -44,7 +53,9 @@ async function getChildXp(request: APIRequestContext, childId: string): Promise<
 /** The family's deductions as the parent actor (newest first). */
 async function getDeductions(
   request: APIRequestContext,
-): Promise<Array<{ id: string; amount: number; applied: number; reason: string }>> {
+): Promise<
+  Array<{ id: string; amount: number; applied: number; reason: string; cancelledAt: string | null }>
+> {
   const res = await request.get('/api/deductions', { headers: agentHeaders(PARENT_REF) })
   expect(res.ok(), await res.text()).toBeTruthy()
   return (await res.json()).data.deductions
@@ -145,5 +156,69 @@ test.describe.serial('Parent point deduction', () => {
     await expect(row).toContainText('หักคะแนน')
     // The ➖ icon carries the sign; the XpBadge itself prints the magnitude.
     await expect(row).toContainText(String(AMOUNT))
+  })
+
+  test('W-DEDUCT-4: parent cancels the deduction from the child profile page → confirm, toast, XP restored', async ({
+    page,
+    request,
+  }) => {
+    await loginAsParent(page)
+    await page.goto(`/children/${CHILD_B.id}`)
+    await expect(page.getByRole('heading', { name: new RegExp(CHILD_B.name) }).first()).toBeVisible()
+
+    const xpBefore = await getChildXp(request, CHILD_B.id)
+
+    const row = page.getByRole('listitem').filter({ hasText: REASON }).first()
+    await expect(row).toBeVisible()
+    await row.getByRole('button', { name: 'ยกเลิก' }).click()
+
+    // The confirm dialog spells out the reason and the resulting restore before committing.
+    const dialog = page.getByRole('dialog', { name: 'ยกเลิกการหักคะแนน?' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText(REASON)
+    await dialog.getByRole('button', { name: 'ยกเลิก' }).click()
+
+    // DOM: a toast, and the row now reads cancelled with its button gone.
+    await expect(page.getByRole('status')).toContainText('ยกเลิก')
+    await expect(row).toContainText('ยกเลิกแล้ว')
+    await expect(row.getByRole('button', { name: 'ยกเลิก' })).toHaveCount(0)
+
+    // API: the balance really moved back, and the ledger row itself says cancelled.
+    expect(await getChildXp(request, CHILD_B.id)).toBe(xpBefore + AMOUNT)
+    const mine = (await getDeductions(request)).find((d) => d.reason === REASON)
+    expect(mine?.cancelledAt, 'the deduction is marked cancelled').toBeTruthy()
+  })
+
+  test('W-DEDUCT-5: the parent history timeline shows the deduction as cancelled, with no cancel control left', async ({
+    page,
+  }) => {
+    await loginAsParent(page)
+    await page.goto('/history')
+    await expect(page.getByRole('heading', { name: 'ประวัติงานบ้าน' })).toBeVisible()
+
+    const row = page.getByRole('listitem').filter({ hasText: REASON }).first()
+    await expect(row).toBeVisible()
+    await expect(row).toContainText('ยกเลิกแล้ว')
+    await expect(row.getByRole('button', { name: 'ยกเลิก' })).toHaveCount(0)
+  })
+
+  test('W-DEDUCT-6: the CHILD sees the cancelled deduction too, with no cancel control ever offered', async ({
+    page,
+  }) => {
+    await page.goto('/pin')
+    await page.getByRole('button', { name: CHILD_B.name }).click()
+    for (const digit of CHILD_B.pin) {
+      await page.getByRole('button', { name: digit, exact: true }).click()
+    }
+    await page.waitForURL('**/child')
+
+    await page.goto('/child/tasks')
+    await expect(page.getByRole('heading', { name: 'งานของฉัน' })).toBeVisible()
+
+    const row = page.getByRole('listitem').filter({ hasText: REASON }).first()
+    await expect(row).toBeVisible()
+    await expect(row).toContainText('ยกเลิกแล้ว')
+    // A kid must never be offered the cancel action, cancelled or not.
+    await expect(row.getByRole('button', { name: 'ยกเลิก' })).toHaveCount(0)
   })
 })

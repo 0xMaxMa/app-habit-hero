@@ -109,14 +109,15 @@ model User {
   // Child login: 4-digit PIN, bcrypt-hashed. Null for parents / kids without a PIN.
   pinHash      String? @map("pin_hash")
 
-  progress            UserProgress?
-  assignedChores      Chore[]            @relation("ChoreAssignee")
-  completions         ChoreCompletion[]  @relation("CompletionCompleter")
-  reviewedCompletions ChoreCompletion[]  @relation("CompletionReviewer")
-  redemptions         RewardRedemption[] @relation("RedemptionRedeemer")
-  badges              UserBadge[]
-  pointAdjustments    PointAdjustment[]  @relation("AdjustmentSubject")
-  authoredAdjustments PointAdjustment[]  @relation("AdjustmentAuthor")
+  progress             UserProgress?
+  assignedChores       Chore[]            @relation("ChoreAssignee")
+  completions          ChoreCompletion[]  @relation("CompletionCompleter")
+  reviewedCompletions  ChoreCompletion[]  @relation("CompletionReviewer")
+  redemptions          RewardRedemption[] @relation("RedemptionRedeemer")
+  badges               UserBadge[]
+  pointAdjustments     PointAdjustment[]  @relation("AdjustmentSubject")
+  authoredAdjustments  PointAdjustment[]  @relation("AdjustmentAuthor")
+  cancelledAdjustments PointAdjustment[]  @relation("AdjustmentCanceller")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -309,6 +310,14 @@ model PointAdjustment {
   // the child's history along with them.
   creator   User?   @relation("AdjustmentAuthor", fields: [createdBy], references: [id], onDelete: SetNull)
 
+  /// Set together, never independently: a cancelled adjustment always has both
+  /// or neither. Never deleted and never offset with a second row — cancelling
+  /// marks THIS row so the history shows the original deduction was undone,
+  /// not two entries that happen to net to zero.
+  cancelledAt DateTime? @map("cancelled_at")
+  cancelledBy String?   @map("cancelled_by")
+  canceller   User?     @relation("AdjustmentCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([userId])
@@ -342,7 +351,7 @@ model UserBadge {
   badgeId String @map("badge_id")
   badge   Badge  @relation(fields: [badgeId], references: [id], onDelete: Cascade)
 
-  earnedAt DateTime @default(now()) @map("earned_at")
+  earnedAt DateTime  @default(now()) @map("earned_at")
   // Null until the child has seen the "you earned a new badge!" celebration.
   // Drives the "ใหม่ (new)" highlight + the one-time popup.
   seenAt   DateTime? @map("seen_at")
