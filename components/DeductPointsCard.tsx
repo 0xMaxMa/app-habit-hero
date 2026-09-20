@@ -39,11 +39,6 @@ export interface DeductionResult {
   levelsLost: number
 }
 
-/** The subset of GET /api/progress this card re-reads before confirming. */
-interface LiveProgress {
-  xp: number
-}
-
 const REASON_MAX = 200
 // Everyday sizes: 10 ≈ a nudge, 100 ≈ the biggest single chore in the app.
 const QUICK_AMOUNTS = [10, 20, 50, 100]
@@ -64,14 +59,8 @@ export function DeductPointsCard({
   const [reason, setReason] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
-  const [checkingBalance, setCheckingBalance] = useState(false)
   const [busy, setBusy] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  // Re-read right before the confirm step so the preview doesn't promise a
-  // balance based on a `currentXp` prop that only refreshes on the parent's
-  // own poll interval — the server is still the real source of truth either
-  // way, but this keeps what the dialog *says* honest too.
-  const [liveXp, setLiveXp] = useState<number | null>(null)
 
   const amount = Number(amountText)
   const amountValid =
@@ -79,14 +68,15 @@ export function DeductPointsCard({
   const reasonValid = reason.trim().length > 0
   const canSubmit = amountValid && reasonValid
 
-  const basisXp = liveXp ?? currentXp
-  // Mirror the server's floor (lib/xp.addXp) so the preview cannot promise a
-  // negative balance the API would never write.
-  const after = amountValid ? addXp(basisXp, -amount) : basisXp
-  const applied = basisXp - after
+  // The server is the real source of truth and checks the floor again at
+  // submit time regardless — this preview is just honest about what `amount`
+  // will do to the `currentXp` the parent is already looking at, with no
+  // extra round trip to promise a fresher number.
+  const after = amountValid ? addXp(currentXp, -amount) : currentXp
+  const applied = currentXp - after
   const willFloor = amountValid && applied < amount
 
-  async function openConfirm() {
+  function openConfirm() {
     if (!amountValid) {
       setFormError(
         amountText.trim() === ''
@@ -103,19 +93,6 @@ export function DeductPointsCard({
     }
     setFormError(null)
     setSubmitError(null)
-    setCheckingBalance(true)
-    try {
-      const fresh = await api.get<LiveProgress>(
-        `/api/progress?user=${encodeURIComponent(childId)}`,
-      )
-      setLiveXp(fresh.xp)
-    } catch {
-      // Fall back to the (possibly stale) prop — the server still computes
-      // the real floor/applied amount at submit time regardless.
-      setLiveXp(null)
-    } finally {
-      setCheckingBalance(false)
-    }
     setConfirming(true)
   }
 
@@ -131,7 +108,6 @@ export function DeductPointsCard({
       setConfirming(false)
       setAmountText('')
       setReason('')
-      setLiveXp(null)
       onDeducted(result)
     } catch (err) {
       setSubmitError(
@@ -221,7 +197,7 @@ export function DeductPointsCard({
       {amountValid && (
         <p className="mt-1 flex flex-wrap items-center gap-2 rounded-xl bg-cream-200 px-3 py-2 text-sm font-bold text-ink-700">
           <span>
-            {basisXp.toLocaleString()} → {after.toLocaleString()} XP
+            {currentXp.toLocaleString()} → {after.toLocaleString()} XP
           </span>
           <XpBadge value={-applied} tone="penalty" size="sm" />
           {willFloor && (
@@ -244,7 +220,7 @@ export function DeductPointsCard({
         fullWidth
         className="mt-4"
         onClick={openConfirm}
-        disabled={!canSubmit || checkingBalance}
+        disabled={!canSubmit}
         leftIcon={<span aria-hidden>➖</span>}
       >
         หักคะแนน
@@ -270,13 +246,13 @@ export function DeductPointsCard({
         <ul className="list-disc space-y-1 pl-5 text-sm font-semibold text-ink-600 marker:text-ink-400">
           <li>
             หัก <span className="font-black text-danger-500">{amount.toLocaleString()} XP</span>{' '}
-            จาก {basisXp.toLocaleString()} XP
+            จาก {currentXp.toLocaleString()} XP
           </li>
           <li>เหตุผล: “{reason.trim()}”</li>
           {willFloor && <li>คะแนนมีไม่ถึง หักได้จริง {applied.toLocaleString()} XP (ไม่ติดลบ)</li>}
-          {levelForXp(after) < levelForXp(basisXp) && (
+          {levelForXp(after) < levelForXp(currentXp) && (
             <li className="text-danger-500">
-              Level จะลดจาก {levelForXp(basisXp)} เป็น {levelForXp(after)}
+              Level จะลดจาก {levelForXp(currentXp)} เป็น {levelForXp(after)}
             </li>
           )}
           <li className="text-ink-500">รายการนี้จะขึ้นในประวัติของ{childName} พร้อมเหตุผล</li>

@@ -171,35 +171,44 @@ export default function ChildProfilePage() {
     const silent = background.current
     background.current = false
     async function load() {
-      try {
-        const [p, b, t, c] = await Promise.all([
-          api.get<ProgressResponse>(`/api/progress?user=${encodeURIComponent(childId)}`),
-          api.get<BadgesResponse>(`/api/badges?user=${encodeURIComponent(childId)}`),
-          api.get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(childId)}`),
-          api.get<CompletionsResponse>(`/api/completions?child=${encodeURIComponent(childId)}`),
-        ])
-        if (!alive) return
-        setProgress(p)
-        setBadges(b)
-        setToday(t)
-        setCompletions(c.completions)
+      // All five fire together — `allSettled` (not `all`) because a failed
+      // deductions fetch must not block the rest of the profile (hero card,
+      // badges, this-week, today's chores) from rendering, and vice versa.
+      const [p, b, t, c, d] = await Promise.allSettled([
+        api.get<ProgressResponse>(`/api/progress?user=${encodeURIComponent(childId)}`),
+        api.get<BadgesResponse>(`/api/badges?user=${encodeURIComponent(childId)}`),
+        api.get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(childId)}`),
+        api.get<CompletionsResponse>(`/api/completions?child=${encodeURIComponent(childId)}`),
+        api.get<DeductionsResponse>(`/api/deductions?child=${encodeURIComponent(childId)}`),
+      ])
+      if (!alive) return
+
+      if (
+        p.status === 'fulfilled' &&
+        b.status === 'fulfilled' &&
+        t.status === 'fulfilled' &&
+        c.status === 'fulfilled'
+      ) {
+        setProgress(p.value)
+        setBadges(b.value)
+        setToday(t.value)
+        setCompletions(c.value.completions)
         setError(null)
-      } catch (err) {
-        if (!alive || silent) return
+      } else if (!silent) {
+        const failed = [p, b, t, c].find(
+          (r): r is PromiseRejectedResult => r.status === 'rejected',
+        )
         setError(
-          err instanceof ApiError ? err.message : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้ง',
+          failed?.reason instanceof ApiError
+            ? failed.reason.message
+            : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้ง',
         )
       }
 
-      // Fetched independently: a failure here must not block the rest of the
-      // profile (hero card, badges, this-week, today's chores) from rendering.
-      try {
-        const d = await api.get<DeductionsResponse>(
-          `/api/deductions?child=${encodeURIComponent(childId)}`,
-        )
-        if (alive) setDeductions(d.deductions)
-      } catch {
-        if (alive) setDeductions([])
+      if (d.status === 'fulfilled') {
+        setDeductions(d.value.deductions)
+      } else {
+        setDeductions([])
       }
     }
     load()
@@ -688,7 +697,7 @@ function DeductionTimelineBody({
           ยกเลิกแล้ว
         </span>
       ) : (
-        <XpBadge value={-deduction.amount} tone="penalty" size="sm" />
+        <XpBadge value={-deduction.applied} tone="penalty" size="sm" />
       )}
     </div>
   )

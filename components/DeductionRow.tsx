@@ -93,7 +93,7 @@ export function DeductionRow({
                 ยกเลิกแล้ว
               </span>
             ) : (
-              <XpBadge value={-d.amount} tone="penalty" size="sm" />
+              <XpBadge value={-d.applied} tone="penalty" size="sm" />
             )}
           </div>
 

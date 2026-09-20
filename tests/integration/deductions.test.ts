@@ -186,6 +186,18 @@ describe('POST /api/deductions — validation', () => {
     expect(await prisma.pointAdjustment.count({ where: { userId: childAId } })).toBe(0)
   })
 
+  it('surfaces the schema\'s own Thai message for a bad amount (this route opts into it)', async () => {
+    // The one route on parseBody's shared helper allowed to show a raw zod
+    // message — every other route (POST /api/bonus etc.) keeps the generic one.
+    const { parentRef, childAId } = await getRefs()
+
+    const res = await DEDUCT(deductAs(parentRef, { user: childAId, amount: 0, reason: 'ทดสอบ' }))
+    const env = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(env.error.message).toBe('จำนวนคะแนนต้องมากกว่า 0')
+  })
+
   it('accepts exactly the cap (the boundary is inclusive)', async () => {
     const { parentRef, childBId } = await getRefs()
     const res = await DEDUCT(

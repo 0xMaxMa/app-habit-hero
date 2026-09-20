@@ -80,7 +80,9 @@ export const POST = withHandler(async (req) => {
   // serves the agent, and a child's own session could otherwise call it.
   assertParent(actor)
 
-  const { user, amount, reason } = await parseBody(req, bodySchema)
+  // This schema's messages are written in Thai for a parent/agent caller to
+  // read directly — the only route on this shared helper that opts in.
+  const { user, amount, reason } = await parseBody(req, bodySchema, { exposeMessage: true })
 
   // `user` may be an internal id OR a channelUserRef — the agent knows callers
   // by ref (same resolution as POST /api/completions).

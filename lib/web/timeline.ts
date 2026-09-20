@@ -6,6 +6,8 @@
  * in one place.
  */
 
+import { bangkokDayKey } from '@/lib/web/time'
+
 export type TimelineEntry<C, D> =
   | { kind: 'completion'; at: number; completion: C }
   | { kind: 'deduction'; at: number; deduction: D }
@@ -37,14 +39,6 @@ export interface DayGroup<C, D> {
   items: TimelineEntry<C, D>[]
 }
 
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  )
-}
-
 const DAY_FMT = new Intl.DateTimeFormat('th-TH', {
   weekday: 'long',
   day: 'numeric',
@@ -55,10 +49,9 @@ const DAY_FMT = new Intl.DateTimeFormat('th-TH', {
 /** "วันนี้" / "เมื่อวาน" / full Thai date — the day-group header label. */
 export function formatDayLabel(d: Date): string {
   const now = new Date()
-  if (isSameDay(d, now)) return 'วันนี้'
-  const yesterday = new Date(now)
-  yesterday.setDate(now.getDate() - 1)
-  if (isSameDay(d, yesterday)) return 'เมื่อวาน'
+  if (bangkokDayKey(d) === bangkokDayKey(now)) return 'วันนี้'
+  const yesterday = new Date(now.getTime() - 86_400_000)
+  if (bangkokDayKey(d) === bangkokDayKey(yesterday)) return 'เมื่อวาน'
   return DAY_FMT.format(d)
 }
 
@@ -71,7 +64,9 @@ export function groupByDay<C, D>(
 
   for (const item of items) {
     const d = new Date(item.at)
-    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+    // Bangkok calendar day, not the runtime's local timezone — otherwise a
+    // parent open the app while abroad buckets entries near midnight wrong.
+    const key = bangkokDayKey(d)
     if (!current || current.key !== key) {
       current = { key, label: formatDayLabel(d), items: [] }
       groups.push(current)

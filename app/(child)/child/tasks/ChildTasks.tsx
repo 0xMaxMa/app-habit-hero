@@ -107,27 +107,29 @@ export function ChildTasks({ childId }: { childId: string }) {
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false
-    try {
-      const [today, comps] = await Promise.all([
-        api.get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(childId)}`),
-        api.get<CompletionsResponse>(`/api/completions?child=${encodeURIComponent(childId)}`),
-      ])
-      setChores(today.chores)
-      setCompletions(comps.completions)
+    // All three fire together — `allSettled` (not `all`) because a failed
+    // deductions fetch must not block/error today's chores or completions
+    // (core to this page) or vice versa; each result is handled on its own.
+    const [today, comps, deds] = await Promise.allSettled([
+      api.get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(childId)}`),
+      api.get<CompletionsResponse>(`/api/completions?child=${encodeURIComponent(childId)}`),
+      // No ?child= — the endpoint pins a child caller to their own rows.
+      api.get<DeductionsResponse>('/api/deductions'),
+    ])
+
+    if (today.status === 'fulfilled' && comps.status === 'fulfilled') {
+      setChores(today.value.chores)
+      setCompletions(comps.value.completions)
       setError(null)
-    } catch (err) {
-      if (silent) return // background refresh — keep the last good view
-      setError(err instanceof ApiError ? err.message : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้งนะ')
+    } else if (!silent) {
+      const failure = today.status === 'rejected' ? today.reason : (comps as PromiseRejectedResult).reason
+      setError(failure instanceof ApiError ? failure.message : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้งนะ')
     }
 
-    // Fetched independently: a failure here must not block today's chores or
-    // completions (fetched above) — those are core, this is supplementary.
-    try {
-      // No ?child= — the endpoint pins a child caller to their own rows.
-      const deds = await api.get<DeductionsResponse>('/api/deductions')
-      setDeductions(deds.deductions)
-    } catch {
-      if (!silent) setDeductions([])
+    if (deds.status === 'fulfilled') {
+      setDeductions(deds.value.deductions)
+    } else if (!silent) {
+      setDeductions([])
     }
   }, [childId])
 

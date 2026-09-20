@@ -19,9 +19,11 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
  *   - the row reading "ยกเลิกแล้ว" with no cancel control left, on BOTH the
  *     parent history page and the child's own tasks page
  *
- * Fixtures come from prisma/seed.test.ts. This file uses น้องบี (600 XP) so the
- * deduction never hits the zero floor, and it is the only spec that writes that
- * child's XP (approval-history.spec.ts only creates a pending row for them).
+ * Fixtures come from prisma/seed.test.ts. This file uses น้องบี (600 XP) and is
+ * the only spec that writes that child's XP (approval-history.spec.ts only
+ * creates a pending row for them). W-DEDUCT-1..6 keep the balance non-floored;
+ * W-DEDUCT-7 deliberately floors it at 0 (asserting the badge shows what was
+ * actually taken, not what was requested) then cancels to restore it.
  *
  * The cases run in ORDER (serial): the deduction made in W-DEDUCT-1 is what
  * the rest read back, and the cancel in W-DEDUCT-4 is what W-DEDUCT-5/6 read back.
@@ -220,5 +222,52 @@ test.describe.serial('Parent point deduction', () => {
     await expect(row).toContainText('ยกเลิกแล้ว')
     // A kid must never be offered the cancel action, cancelled or not.
     await expect(row.getByRole('button', { name: 'ยกเลิก' })).toHaveCount(0)
+  })
+
+  test('W-DEDUCT-7: a deduction that floors at 0 shows what was actually taken, not what was requested', async ({
+    page,
+    request,
+  }) => {
+    // W-DEDUCT-1 took 50 off น้องบี and W-DEDUCT-4 cancelled it, so the balance
+    // is back to its seeded 600 here — comfortably under MAX_DEDUCTION_XP
+    // (1000), so a 900-XP ask both floors the balance AND stays form-valid.
+    await loginAsParent(page)
+    await page.goto(`/children/${CHILD_B.id}`)
+    await expect(page.getByRole('heading', { name: new RegExp(CHILD_B.name) }).first()).toBeVisible()
+
+    const xpBefore = await getChildXp(request, CHILD_B.id)
+    const REQUESTED = 900
+    const FLOOR_REASON = `หักเกินยอด e2e-${Date.now()}`
+
+    const amount = page.getByLabel('จำนวนคะแนน (XP)')
+    await amount.fill(String(REQUESTED))
+    await page.getByLabel(/^เหตุผล/).fill(FLOOR_REASON)
+    await page.getByRole('button', { name: 'หักคะแนน' }).click()
+
+    // The confirm button itself already reads the applied (floored) amount.
+    const dialog = page.getByRole('dialog', { name: 'ยืนยันหักคะแนน?' })
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: `หัก ${xpBefore} XP` }).click()
+    await expect(page.getByRole('status')).toContainText('หัก')
+
+    // DOM: the timeline badge must read the FLOORED amount (applied), never
+    // the full requested amount — this is the bug the code review caught.
+    const row = page.getByRole('listitem').filter({ hasText: FLOOR_REASON }).first()
+    await expect(row).toBeVisible()
+    await expect(row).toContainText(`คะแนนไม่พอ หักได้ ${xpBefore.toLocaleString()} XP`)
+    await expect(row).toContainText(String(xpBefore))
+    await expect(row).not.toContainText(String(REQUESTED))
+
+    expect(await getChildXp(request, CHILD_B.id)).toBe(0)
+
+    // Clean up: cancel it so this test leaves น้องบี's balance exactly as it
+    // found it, whatever future tests land after this one.
+    await row.getByRole('button', { name: 'ยกเลิก' }).click()
+    const cancelDialog = page.getByRole('dialog', { name: 'ยกเลิกการหักคะแนน?' })
+    await expect(cancelDialog).toBeVisible()
+    await cancelDialog.getByRole('button', { name: 'ยกเลิก' }).click()
+    await expect(page.getByRole('status')).toContainText('ยกเลิก')
+
+    expect(await getChildXp(request, CHILD_B.id)).toBe(xpBefore)
   })
 })
