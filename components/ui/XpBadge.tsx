@@ -35,7 +35,10 @@ export function XpBadge({
   className,
 }: XpBadgeProps) {
   const sign = showSign && value > 0 ? '+' : ''
-  const display = `${sign}${value.toLocaleString()}`
+  // The ➖ icon already signals "penalty" — printing the numeric sign too would
+  // double up as "➖ -50 XP". Show the magnitude; the icon carries the sign.
+  const display =
+    tone === 'penalty' ? Math.abs(value).toLocaleString() : `${sign}${value.toLocaleString()}`
   return (
     <span
       className={cn(
@@ -45,8 +48,10 @@ export function XpBadge({
         className,
       )}
     >
+      {/* A star next to "-50 XP" reads as a reward — the penalty tone gets a
+          minus instead, so an earning and a deduction never look alike. */}
       <span aria-hidden className="leading-none">
-        ⭐
+        {tone === 'penalty' ? '➖' : '⭐'}
       </span>
       {display}
       <span className="font-bold opacity-80">XP</span>

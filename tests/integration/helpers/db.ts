@@ -18,6 +18,7 @@ import { prisma } from '@/lib/db'
 const APP_TABLES = [
   'user_badges',
   'badges',
+  'point_adjustments',
   'reward_redemptions',
   'chore_completions',
   'user_progress',

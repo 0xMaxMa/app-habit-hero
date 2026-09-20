@@ -258,6 +258,30 @@ describe('POST /api/bonus — parent grants bonus XP (A-TOOL-3)', () => {
     // No XP was granted.
     expect(await totalXpOf(childAId)).toBe(before)
   })
+
+  it('rejects an invalid amount with the generic message, not the raw zod issue text', async () => {
+    // lib/api/validate.ts parseBody only exposes the raw zod message to a
+    // caller that opts in (POST /api/deductions) — every other route sharing
+    // the helper, bonus included, must keep the pre-existing generic wording.
+    const { childAId, parentRef } = await getRefs()
+    const before = await totalXpOf(childAId)
+
+    const req = new Request('http://t/api/bonus', {
+      method: 'POST',
+      headers: agentHeaders(parentRef),
+      body: JSON.stringify({ user: childAId, amount: -1, reason: 'ทดสอบ' }),
+    })
+    const res = await BONUS(req)
+    const env = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(env.ok).toBe(false)
+    expect(env.error.code).toBe('BAD_REQUEST')
+    expect(env.error.message).toBe('Invalid request body')
+    expect(env.error.message).not.toMatch(/greater than 0/i)
+
+    expect(await totalXpOf(childAId)).toBe(before)
+  })
 })
 
 describe('DELETE /api/rewards/:id — reward with redemption history', () => {

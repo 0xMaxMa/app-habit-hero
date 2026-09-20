@@ -9,11 +9,20 @@
  * an activity timeline. Client-side fetch only (the (parent) layout provides
  * the parent-only guard + shell) so `next build` never touches Postgres.
  *
+ * It is also the one place a parent can take XP back off a child
+ * (DeductPointsCard → POST /api/deductions); those entries are folded into the
+ * same timeline, tinted danger so they never read as an earning. A deduction
+ * can be undone right there too (POST /api/deductions/:id/cancel) — no time
+ * limit — which restores the XP it actually took and marks the row cancelled
+ * in place rather than deleting it or writing a second offsetting entry.
+ *
  * Data:
  *   • GET /api/progress?user=<id>        → name, xp, level, xpToNext, streak, avatar
  *   • GET /api/badges?user=<id>          → full earned/locked wall
  *   • GET /api/chores/today?child=<id>   → still-pending chores today
  *   • GET /api/completions?child=<id>    → activity timeline + this-week strip
+ *   • GET /api/deductions?child=<id>     → point-deduction entries for the timeline
+ *   • POST /api/deductions/:id/cancel    → undo one of those deductions
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -22,14 +31,21 @@ import { useParams } from 'next/navigation'
 import {
   Avatar,
   BadgeChip,
+  Button,
   Card,
+  ConfirmDialog,
   PhotoThumb,
   ProgressBar,
+  XpBadge,
+  cn,
   type ChoreStatus,
 } from '@/components/ui'
+import { DeductPointsCard, type DeductionResult } from '@/components/DeductPointsCard'
+import type { Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
-import { levelInfo } from '@/lib/level'
+import { levelInfo, rankName } from '@/lib/level'
+import { mergeTimeline } from '@/lib/web/timeline'
 
 // ---- API shapes (subset) --------------------------------------------------
 
@@ -73,6 +89,17 @@ interface Completion {
 interface CompletionsResponse {
   completions: Completion[]
 }
+interface DeductionsResponse {
+  deductions: Deduction[]
+}
+interface CancelDeductionResponse {
+  deduction: Deduction
+  restored: number
+  xp: number
+  level: number
+  xpToNext: number
+  leveledUp: boolean
+}
 
 // ---- Date helpers (local calendar) ----------------------------------------
 
@@ -111,6 +138,8 @@ function completionStatus(c: Completion): { chip: ChoreStatus; meta: string } {
 
 // ---------------------------------------------------------------------------
 
+const TIMELINE_PAGE_SIZE = 15
+
 export default function ChildProfilePage() {
   const params = useParams<{ id: string }>()
   const childId = params.id
@@ -119,34 +148,67 @@ export default function ChildProfilePage() {
   const [badges, setBadges] = useState<BadgesResponse | null>(null)
   const [today, setToday] = useState<TodayResponse | null>(null)
   const [completions, setCompletions] = useState<Completion[] | null>(null)
+  const [deductions, setDeductions] = useState<Deduction[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+  // Cancel-deduction: the row awaiting confirmation, plus its in-flight state.
+  const [cancelTarget, setCancelTarget] = useState<Deduction | null>(null)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [cancelError, setCancelError] = useState<string | null>(null)
   // Bumping this key re-runs the loader; `background` marks a silent refresh.
   const [reloadKey, setReloadKey] = useState(0)
   const background = useRef(false)
+  const [timelineShown, setTimelineShown] = useState(TIMELINE_PAGE_SIZE)
+
+  // Switching to a different child's profile (no remount — same route) should
+  // not carry over how far the previous child's timeline was expanded.
+  useEffect(() => {
+    setTimelineShown(TIMELINE_PAGE_SIZE)
+  }, [childId])
 
   useEffect(() => {
     let alive = true
     const silent = background.current
     background.current = false
     async function load() {
-      try {
-        const [p, b, t, c] = await Promise.all([
-          api.get<ProgressResponse>(`/api/progress?user=${encodeURIComponent(childId)}`),
-          api.get<BadgesResponse>(`/api/badges?user=${encodeURIComponent(childId)}`),
-          api.get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(childId)}`),
-          api.get<CompletionsResponse>(`/api/completions?child=${encodeURIComponent(childId)}`),
-        ])
-        if (!alive) return
-        setProgress(p)
-        setBadges(b)
-        setToday(t)
-        setCompletions(c.completions)
+      // All five fire together — `allSettled` (not `all`) because a failed
+      // deductions fetch must not block the rest of the profile (hero card,
+      // badges, this-week, today's chores) from rendering, and vice versa.
+      const [p, b, t, c, d] = await Promise.allSettled([
+        api.get<ProgressResponse>(`/api/progress?user=${encodeURIComponent(childId)}`),
+        api.get<BadgesResponse>(`/api/badges?user=${encodeURIComponent(childId)}`),
+        api.get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(childId)}`),
+        api.get<CompletionsResponse>(`/api/completions?child=${encodeURIComponent(childId)}`),
+        api.get<DeductionsResponse>(`/api/deductions?child=${encodeURIComponent(childId)}`),
+      ])
+      if (!alive) return
+
+      if (
+        p.status === 'fulfilled' &&
+        b.status === 'fulfilled' &&
+        t.status === 'fulfilled' &&
+        c.status === 'fulfilled'
+      ) {
+        setProgress(p.value)
+        setBadges(b.value)
+        setToday(t.value)
+        setCompletions(c.value.completions)
         setError(null)
-      } catch (err) {
-        if (!alive || silent) return
-        setError(
-          err instanceof ApiError ? err.message : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้ง',
+      } else if (!silent) {
+        const failed = [p, b, t, c].find(
+          (r): r is PromiseRejectedResult => r.status === 'rejected',
         )
+        setError(
+          failed?.reason instanceof ApiError
+            ? failed.reason.message
+            : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้ง',
+        )
+      }
+
+      if (d.status === 'fulfilled') {
+        setDeductions(d.value.deductions)
+      } else {
+        setDeductions([])
       }
     }
     load()
@@ -160,6 +222,70 @@ export default function ChildProfilePage() {
     setReloadKey((k) => k + 1)
   })
 
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 4000)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  /** A deduction just landed: reflect it immediately, then reconcile silently. */
+  function onDeducted(res: DeductionResult) {
+    setDeductions((prev) => (prev ? [res.deduction, ...prev] : [res.deduction]))
+    setProgress((prev) =>
+      prev
+        ? { ...prev, xp: res.xp, level: res.level, xpToNext: res.xpToNext, rank: rankName(res.level) }
+        : prev,
+    )
+    setToast(
+      `หัก ${res.applied.toLocaleString()} XP แล้ว` +
+        (res.floored && res.applied < res.requested
+          ? ` (ขอหัก ${res.requested.toLocaleString()} แต่คะแนนมีไม่ถึง)`
+          : '') +
+        (res.leveledDown ? ` · Level ลดเหลือ ${res.level}` : ''),
+    )
+    background.current = true
+    setReloadKey((k) => k + 1)
+  }
+
+  function askCancel(deduction: Deduction) {
+    setCancelError(null)
+    setCancelTarget(deduction)
+  }
+
+  /** A cancel just landed: reflect the row + XP immediately, then reconcile silently. */
+  async function confirmCancel() {
+    if (!cancelTarget) return
+    const target = cancelTarget
+    setCancelBusy(true)
+    setCancelError(null)
+    try {
+      const res = await api.post<CancelDeductionResponse>(
+        `/api/deductions/${target.id}/cancel`,
+      )
+      setDeductions((prev) =>
+        prev ? prev.map((d) => (d.id === target.id ? res.deduction : d)) : prev,
+      )
+      setProgress((prev) =>
+        prev
+          ? { ...prev, xp: res.xp, level: res.level, xpToNext: res.xpToNext, rank: rankName(res.level) }
+          : prev,
+      )
+      setCancelTarget(null)
+      setToast(
+        `ยกเลิกการหักคะแนนแล้ว — คืน ${res.restored.toLocaleString()} XP` +
+          (res.leveledUp ? ` · Level ขึ้นเป็น ${res.level}` : ''),
+      )
+      background.current = true
+      setReloadKey((k) => k + 1)
+    } catch (err) {
+      setCancelError(
+        err instanceof ApiError ? err.message : 'ยกเลิกไม่สำเร็จ ลองใหม่อีกครั้ง',
+      )
+    } finally {
+      setCancelBusy(false)
+    }
+  }
+
   if (error) {
     return (
       <div className="space-y-4">
@@ -171,7 +297,7 @@ export default function ChildProfilePage() {
     )
   }
 
-  if (!progress || !badges || !today || !completions) {
+  if (!progress || !badges || !today || !completions || !deductions) {
     return (
       <div className="space-y-4">
         <BackLink />
@@ -185,10 +311,15 @@ export default function ChildProfilePage() {
   const span = info.nextThreshold - info.currentThreshold
   const totalDone = completions.filter((c) => c.status === 'approved').length
 
-  // Newest-first timeline.
-  const timeline = [...completions].sort(
-    (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime(),
+  // Newest-first timeline of both record kinds on one axis.
+  const timeline = mergeTimeline(
+    completions,
+    deductions,
+    (c) => new Date(c.submittedAt).getTime(),
+    (d) => new Date(d.createdAt).getTime(),
   )
+  const visibleTimeline = timeline.slice(0, timelineShown)
+  const hasMoreTimeline = timeline.length > visibleTimeline.length
 
   // "This week" — one cell per weekday (Mon–Sun).
   const monday = mondayOfWeek(new Date())
@@ -311,71 +442,9 @@ export default function ChildProfilePage() {
             </div>
           </Card>
 
-          {/* Activity timeline */}
-          <Card>
-            <h3 className="mb-4 text-lg font-black text-ink-900">ไทม์ไลน์กิจกรรม</h3>
-            {timeline.length === 0 ? (
-              <p className="text-sm font-semibold text-ink-500">ยังไม่มีกิจกรรม</p>
-            ) : (
-              <ul className="space-y-0">
-                {timeline.map((c, i) => {
-                  const st = completionStatus(c)
-                  return (
-                    <li key={c.id} className="flex gap-3.5 pb-4 last:pb-0">
-                      {/* dot + connector */}
-                      <div className="flex flex-col items-center gap-1">
-                        <span
-                          className={
-                            'grid h-7 w-7 shrink-0 place-items-center rounded-pill text-xs font-black ' +
-                            (c.status === 'approved'
-                              ? 'bg-success-100 text-success-500'
-                              : c.status === 'rejected'
-                                ? 'bg-danger-100 text-danger-500'
-                                : 'bg-cream-300 text-ink-500')
-                          }
-                        >
-                          {c.status === 'approved' ? '✓' : c.status === 'rejected' ? '✕' : '⏳'}
-                        </span>
-                        {i < timeline.length - 1 && (
-                          <span className="w-0.5 flex-1 bg-cream-500" />
-                        )}
-                      </div>
-                      {/* body — min-w-0 so the row can shrink below the title's
-                          width. Without it this flex item keeps min-width:auto,
-                          and `truncate` (white-space:nowrap) makes its
-                          min-content the WHOLE title, pushing the card, the main
-                          column and the page wider than the phone. */}
-                      <div className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border-[1.5px] border-cream-400 bg-cream-100 px-3.5 py-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-extrabold text-ink-900">
-                            {c.chore.title}
-                          </p>
-                          <p className="mt-0.5 text-xs font-semibold text-ink-500">
-                            {timeLabel(c.submittedAt)} · {st.meta}
-                          </p>
-                        </div>
-                        <span className="whitespace-nowrap text-sm font-black text-xp-600">
-                          +{(c.xpAwarded ?? c.chore.xpValue).toLocaleString()} XP
-                        </span>
-                        {c.photoUrl && (
-                          <PhotoThumb
-                            photoUrl={c.photoUrl}
-                            title={c.chore.title}
-                            size="sm"
-                          />
-                        )}
-                      </div>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </Card>
-        </div>
-
-        {/* ---- Right column ---- */}
-        <div className="min-w-0 space-y-5">
-          {/* This week */}
+          {/* This week — the daily green/red activity strip, kept above the
+              timeline so a glance at "did they show up today" never requires
+              scrolling past the (potentially long) activity history. */}
           <Card>
             <h3 className="text-base font-black text-ink-900">สัปดาห์นี้</h3>
             <div className="mt-4 grid grid-cols-7 gap-2">
@@ -404,6 +473,88 @@ export default function ChildProfilePage() {
             </div>
           </Card>
 
+          {/* Activity timeline — capped at TIMELINE_PAGE_SIZE entries per page
+              and grown with "โหลดเพิ่มเติม" so a long history never forces the
+              whole page (including the point-deduction card below it) behind
+              an endless scroll. */}
+          <Card>
+            <h3 className="mb-4 text-lg font-black text-ink-900">ไทม์ไลน์กิจกรรม</h3>
+            {timeline.length === 0 ? (
+              <p className="text-sm font-semibold text-ink-500">ยังไม่มีกิจกรรม</p>
+            ) : (
+              <>
+                <ul className="space-y-0">
+                  {visibleTimeline.map((entry, i) => (
+                    <li
+                      key={`${entry.kind}-${entry.kind === 'completion' ? entry.completion.id : entry.deduction.id}`}
+                      className="flex gap-3.5 pb-4 last:pb-0"
+                    >
+                      {/* dot + connector */}
+                      <div className="flex flex-col items-center gap-1">
+                        <span
+                          className={cn(
+                            'grid h-7 w-7 shrink-0 place-items-center rounded-pill text-xs font-black',
+                            entry.kind === 'deduction'
+                              ? 'bg-danger-100 text-danger-500'
+                              : entry.completion.status === 'approved'
+                                ? 'bg-success-100 text-success-500'
+                                : entry.completion.status === 'rejected'
+                                  ? 'bg-danger-100 text-danger-500'
+                                  : 'bg-cream-300 text-ink-500',
+                          )}
+                        >
+                          {entry.kind === 'deduction'
+                            ? '➖'
+                            : entry.completion.status === 'approved'
+                              ? '✓'
+                              : entry.completion.status === 'rejected'
+                                ? '✕'
+                                : '⏳'}
+                        </span>
+                        {i < visibleTimeline.length - 1 && (
+                          <span className="w-0.5 flex-1 bg-cream-500" />
+                        )}
+                      </div>
+                      {/* body — min-w-0 so the row can shrink below the title's
+                          width. Without it this flex item keeps min-width:auto,
+                          and `truncate` (white-space:nowrap) makes its
+                          min-content the WHOLE title, pushing the card, the main
+                          column and the page wider than the phone. */}
+                      {entry.kind === 'deduction' ? (
+                        <DeductionTimelineBody deduction={entry.deduction} onCancel={askCancel} />
+                      ) : (
+                        <CompletionTimelineBody completion={entry.completion} />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {hasMoreTimeline && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    fullWidth
+                    className="mt-2"
+                    onClick={() => setTimelineShown((n) => n + TIMELINE_PAGE_SIZE)}
+                  >
+                    โหลดเพิ่มเติม
+                  </Button>
+                )}
+              </>
+            )}
+          </Card>
+        </div>
+
+        {/* ---- Right column ---- */}
+        <div className="min-w-0 space-y-5">
+          {/* Point deduction — kept in place: rarely used, and it takes XP away. */}
+          <DeductPointsCard
+            childId={childId}
+            childName={progress.name}
+            currentXp={progress.xp}
+            onDeducted={onDeducted}
+          />
+
           {/* Today */}
           <Card>
             <h3 className="mb-3 text-base font-black text-ink-900">
@@ -428,6 +579,126 @@ export default function ChildProfilePage() {
           </Card>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={cancelTarget !== null}
+        title="ยกเลิกการหักคะแนน?"
+        icon="➖"
+        tone="danger"
+        confirmLabel="ยกเลิก"
+        cancelLabel="ไม่ใช่ตอนนี้"
+        busy={cancelBusy}
+        error={cancelError}
+        message={
+          cancelTarget
+            ? `${progress.name} จะได้ ${cancelTarget.applied.toLocaleString()} XP คืน`
+            : undefined
+        }
+        onConfirm={confirmCancel}
+        onCancel={() => {
+          if (cancelBusy) return
+          setCancelTarget(null)
+          setCancelError(null)
+        }}
+      >
+        <ul className="list-disc space-y-1 pl-5 text-sm font-semibold text-ink-600 marker:text-ink-400">
+          <li>เหตุผลเดิม: “{cancelTarget?.reason}”</li>
+          <li className="text-ink-500">รายการนี้จะยังอยู่ในไทม์ไลน์ พร้อมป้าย “ยกเลิกแล้ว”</li>
+        </ul>
+      </ConfirmDialog>
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed inset-x-4 bottom-6 z-50 mx-auto max-w-md rounded-2xl bg-danger-500 px-4 py-3 text-center text-sm font-extrabold text-white shadow-lg"
+        >
+          {toast}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---- Timeline bodies ------------------------------------------------------
+
+function CompletionTimelineBody({ completion }: { completion: Completion }) {
+  const st = completionStatus(completion)
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border-[1.5px] border-cream-400 bg-cream-100 px-3.5 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-extrabold text-ink-900">{completion.chore.title}</p>
+        <p className="mt-0.5 text-xs font-semibold text-ink-500">
+          {timeLabel(completion.submittedAt)} · {st.meta}
+        </p>
+      </div>
+      <span className="whitespace-nowrap text-sm font-black text-xp-600">
+        +{(completion.xpAwarded ?? completion.chore.xpValue).toLocaleString()} XP
+      </span>
+      {completion.photoUrl && (
+        <PhotoThumb photoUrl={completion.photoUrl} title={completion.chore.title} size="sm" />
+      )}
+    </div>
+  )
+}
+
+/**
+ * A point-deduction row. Same rail as a completion, but danger-tinted and it
+ * leads with the reason — on this page the parent already knows they did it;
+ * what matters when scrolling back is WHY. (The list pages use the fuller
+ * `DeductionRow`.) A cancelled row shows a "ยกเลิกแล้ว" badge in place of the
+ * XP pill and struck-through text instead of the "ยกเลิก" button.
+ */
+function DeductionTimelineBody({
+  deduction,
+  onCancel,
+}: {
+  deduction: Deduction
+  onCancel: (deduction: Deduction) => void
+}) {
+  const cancelled = deduction.cancelledAt !== null
+  return (
+    <div
+      className={cn(
+        'flex min-w-0 flex-1 items-center gap-3 rounded-2xl border-[1.5px] border-danger-500/30 px-3.5 py-3',
+        cancelled ? 'bg-cream-100 opacity-70' : 'bg-danger-100/60',
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <p
+          className={cn(
+            'truncate text-sm font-extrabold text-ink-900',
+            cancelled && 'line-through',
+          )}
+        >
+          หักคะแนน · {deduction.reason}
+        </p>
+        <p className="mt-0.5 text-xs font-semibold text-ink-500">
+          {timeLabel(deduction.createdAt)}
+          {deduction.by ? ` · โดย${deduction.by.name}` : ''}
+          {!cancelled && deduction.applied < deduction.amount
+            ? ` · คะแนนไม่พอ หักได้ ${deduction.applied.toLocaleString()} XP`
+            : ''}
+          {cancelled ? ` · คืน ${deduction.applied.toLocaleString()} XP แล้ว` : ''}
+        </p>
+        {!cancelled && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mt-1 px-0 text-danger-500 hover:bg-transparent hover:underline"
+            onClick={() => onCancel(deduction)}
+          >
+            ยกเลิก
+          </Button>
+        )}
+      </div>
+      {cancelled ? (
+        <span className="whitespace-nowrap rounded-pill bg-cream-300 px-2.5 py-1 text-xs font-black text-ink-600">
+          ยกเลิกแล้ว
+        </span>
+      ) : (
+        <XpBadge value={-deduction.applied} tone="penalty" size="sm" />
+      )}
     </div>
   )
 }

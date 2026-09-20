@@ -10,21 +10,29 @@
  *   3. ประวัติทั้งหมด          — older completions, grouped by day (this replaces
  *                              the standalone /child/history screen).
  *
+ * Point-deduction entries (POST /api/deductions, by a parent) are folded into
+ * 2 and 3 with their reason. A kid must never find XP missing with no explanation — that
+ * is the whole reason the API makes `reason` mandatory.
+ *
  * The home screen keeps its own "งานวันนี้" section; this page is the fuller
  * view reachable from the 2nd nav tab.
  *
  * Data (all client-side so `next build` never touches Postgres):
  *   • GET  /api/chores/today?child=<id> → today's still-pending chores
  *   • GET  /api/completions?child=<id>  → the child's own completion timeline
+ *   • GET  /api/deductions              → the child's OWN point-deduction entries
+ *                                         (the endpoint self-scopes a child)
  *   • POST /api/completions (multipart) → submit a chore done (optional photo)
  * Photos come from GET /api/photos/<file> (authenticated, family-scoped).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Card, PhotoThumb, StatusChip, XpBadge, type ChoreStatus } from '@/components/ui'
+import { DeductionRow, type Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { downscaleImage } from '@/lib/web/image'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
+import { mergeTimeline, groupByDay, type TimelineEntry as SharedTimelineEntry } from '@/lib/web/timeline'
 
 // ---- API response shapes (the subset this screen reads) -------------------
 
@@ -55,6 +63,12 @@ interface Completion {
 interface CompletionsResponse {
   completions: Completion[]
 }
+interface DeductionsResponse {
+  deductions: Deduction[]
+}
+
+/** One axis for both record kinds, so a deduction sits in the right day. */
+type TimelineEntry = SharedTimelineEntry<Completion, Deduction>
 
 type Toast = { kind: 'success' | 'error'; text: string } | null
 
@@ -82,6 +96,7 @@ function startOfDay(d: Date): number {
 export function ChildTasks({ childId }: { childId: string }) {
   const [chores, setChores] = useState<TodayChore[] | null>(null)
   const [completions, setCompletions] = useState<Completion[] | null>(null)
+  const [deductions, setDeductions] = useState<Deduction[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<Toast>(null)
   const [submitting, setSubmitting] = useState<string | null>(null)
@@ -92,17 +107,29 @@ export function ChildTasks({ childId }: { childId: string }) {
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false
-    try {
-      const [today, comps] = await Promise.all([
-        api.get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(childId)}`),
-        api.get<CompletionsResponse>(`/api/completions?child=${encodeURIComponent(childId)}`),
-      ])
-      setChores(today.chores)
-      setCompletions(comps.completions)
+    // All three fire together — `allSettled` (not `all`) because a failed
+    // deductions fetch must not block/error today's chores or completions
+    // (core to this page) or vice versa; each result is handled on its own.
+    const [today, comps, deds] = await Promise.allSettled([
+      api.get<TodayResponse>(`/api/chores/today?child=${encodeURIComponent(childId)}`),
+      api.get<CompletionsResponse>(`/api/completions?child=${encodeURIComponent(childId)}`),
+      // No ?child= — the endpoint pins a child caller to their own rows.
+      api.get<DeductionsResponse>('/api/deductions'),
+    ])
+
+    if (today.status === 'fulfilled' && comps.status === 'fulfilled') {
+      setChores(today.value.chores)
+      setCompletions(comps.value.completions)
       setError(null)
-    } catch (err) {
-      if (silent) return // background refresh — keep the last good view
-      setError(err instanceof ApiError ? err.message : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้งนะ')
+    } else if (!silent) {
+      const failure = today.status === 'rejected' ? today.reason : (comps as PromiseRejectedResult).reason
+      setError(failure instanceof ApiError ? failure.message : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้งนะ')
+    }
+
+    if (deds.status === 'fulfilled') {
+      setDeductions(deds.value.deductions)
+    } else if (!silent) {
+      setDeductions([])
     }
   }, [childId])
 
@@ -164,20 +191,24 @@ export function ChildTasks({ childId }: { childId: string }) {
     if (chore && file) submitChore(chore, file)
   }
 
-  // ---- Split completions: done-today vs older history ---------------------
+  // ---- Split the timeline: today vs older history ------------------------
   const { doneToday, history } = useMemo(() => {
     const todayStart = startOfDay(new Date())
-    const sorted = [...(completions ?? [])].sort(
-      (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime(),
+    const sorted = mergeTimeline(
+      completions ?? [],
+      deductions ?? [],
+      (c) => new Date(c.submittedAt).getTime(),
+      (d) => new Date(d.createdAt).getTime(),
     )
-    const doneToday: Completion[] = []
-    const history: Completion[] = []
-    for (const c of sorted) {
-      if (startOfDay(new Date(c.submittedAt)) === todayStart) doneToday.push(c)
-      else history.push(c)
+
+    const doneToday: TimelineEntry[] = []
+    const history: TimelineEntry[] = []
+    for (const e of sorted) {
+      if (startOfDay(new Date(e.at)) === todayStart) doneToday.push(e)
+      else history.push(e)
     }
     return { doneToday, history }
-  }, [completions])
+  }, [completions, deductions])
 
   const historyGroups = useMemo(() => groupByDay(history), [history])
 
@@ -260,13 +291,15 @@ export function ChildTasks({ childId }: { childId: string }) {
         )}
       </section>
 
-      {/* ---- 2) Done today --------------------------------------------- */}
+      {/* ---- 2) Today's record (done + any point deductions) ------------- */}
       {doneToday.length > 0 && (
-        <section aria-label="ทำแล้ววันนี้" className="space-y-3">
-          <h2 className="text-lg font-extrabold text-ink-900">ทำแล้ววันนี้</h2>
+        <section aria-label="วันนี้" className="space-y-3">
+          <h2 className="text-lg font-extrabold text-ink-900">
+            {doneToday.some((e) => e.kind === 'deduction') ? 'วันนี้' : 'ทำแล้ววันนี้'}
+          </h2>
           <ol className="space-y-3">
             {doneToday.map((entry) => (
-              <TimelineRow key={entry.id} entry={entry} />
+              <EntryRow key={entryKey(entry)} entry={entry} />
             ))}
           </ol>
         </section>
@@ -275,7 +308,7 @@ export function ChildTasks({ childId }: { childId: string }) {
       {/* ---- 3) Full history (older than today) ------------------------ */}
       <section aria-label="ประวัติทั้งหมด" className="space-y-3">
         <h2 className="text-lg font-extrabold text-ink-900">ประวัติทั้งหมด</h2>
-        {completions === null && !error ? (
+        {(completions === null || deductions === null) && !error ? (
           <TimelineSkeleton />
         ) : historyGroups.length === 0 ? (
           <Card variant="sunk" className="text-center">
@@ -292,7 +325,7 @@ export function ChildTasks({ childId }: { childId: string }) {
                 <h3 className="text-sm font-extrabold text-ink-600">{group.label}</h3>
                 <ol className="space-y-3">
                   {group.items.map((entry) => (
-                    <TimelineRow key={entry.id} entry={entry} />
+                    <EntryRow key={entryKey(entry)} entry={entry} />
                   ))}
                 </ol>
               </section>
@@ -369,6 +402,23 @@ function ChoreRow({
   )
 }
 
+// ---- Timeline rows --------------------------------------------------------
+
+function entryKey(entry: TimelineEntry): string {
+  return entry.kind === 'completion' ? `c-${entry.completion.id}` : `d-${entry.deduction.id}`
+}
+
+/** Render whichever kind of record this is. */
+function EntryRow({ entry }: { entry: TimelineEntry }) {
+  if (entry.kind === 'deduction') {
+    // kidVoice: "Mom deducted my points" reads as something that happened TO
+    // them, which is what it was — showBy stays on so it is never an
+    // anonymous penalty.
+    return <DeductionRow deduction={entry.deduction} kidVoice />
+  }
+  return <TimelineRow entry={entry.completion} />
+}
+
 // ---- One completion row (mirrors the old history timeline) ----------------
 
 function TimelineRow({ entry }: { entry: Completion }) {
@@ -441,52 +491,9 @@ function TimelineSkeleton() {
   )
 }
 
-// ---- Day grouping (mirrors the old history screen) ------------------------
+// ---- Formatting helpers ----------------------------------------------------
 
-interface DayGroup {
-  key: string
-  label: string
-  items: Completion[]
-}
-
-function groupByDay(items: Completion[]): DayGroup[] {
-  const groups: DayGroup[] = []
-  let current: DayGroup | null = null
-  for (const item of items) {
-    const d = new Date(item.submittedAt)
-    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
-    if (!current || current.key !== key) {
-      current = { key, label: formatDay(d), items: [] }
-      groups.push(current)
-    }
-    current.items.push(item)
-  }
-  return groups
-}
-
-const DAY_FMT = new Intl.DateTimeFormat('th-TH', {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-})
 const TIME_FMT = new Intl.DateTimeFormat('th-TH', { hour: '2-digit', minute: '2-digit' })
-
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  )
-}
-function formatDay(d: Date): string {
-  const now = new Date()
-  if (isSameDay(d, now)) return 'วันนี้'
-  const yesterday = new Date(now)
-  yesterday.setDate(now.getDate() - 1)
-  if (isSameDay(d, yesterday)) return 'เมื่อวาน'
-  return DAY_FMT.format(d)
-}
 function formatTime(iso: string): string {
   return `${TIME_FMT.format(new Date(iso))} น.`
 }

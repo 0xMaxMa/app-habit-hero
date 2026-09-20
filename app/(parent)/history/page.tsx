@@ -7,19 +7,27 @@
  * completion (approved / pending / rejected) with photo thumbnails, so a parent
  * can scroll back through what the kids did and how it was reviewed.
  *
+ * Point-deduction entries are folded into the same day groups (danger-tinted,
+ * via the shared DeductionRow) — a balance that moved down has to be as
+ * findable here as the chore that moved it up.
+ *
  * Client-side fetch only (the (parent)/layout already provides the desktop
  * shell + parent-only guard), so `next build` never touches Postgres.
  *
  * Approved rows carry an "ยกเลิกอนุมัติ" action — the only place in the app a
  * parent can walk an approval back (XP clawed back, badges revoked, the chore
- * returned to the review queue with its photo intact).
+ * returned to the review queue with its photo intact). Deduction rows carry
+ * their own "ยกเลิก" (DeductionRow's `onCancel`) — undoes just that deduction,
+ * no time limit, restores the XP it actually took.
  *
  * Data:
  *   • GET /api/completions[?child=<id>] → family-scoped completions of ALL
  *     statuses (the endpoint already returns every status when `status` is
  *     omitted; we sort newest-first here per its documented caller contract).
+ *   • GET /api/deductions[?child=<id>]  → point-deduction entries, same family scope.
  *   • GET /api/progress?scope=weekly    → the family's children, for the filter.
  *   • POST /api/completions/:id/unapprove → undo an approval.
+ *   • POST /api/deductions/:id/cancel     → undo a deduction.
  *
  * Photos are served by GET /api/photos/<file>; `photoUrl` is already stored as
  * that full path, so we only prefix the app base path for the <img src>.
@@ -37,8 +45,10 @@ import {
   cn,
   type ChoreStatus,
 } from '@/components/ui'
+import { DeductionRow, type Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
+import { mergeTimeline, groupByDay, type TimelineEntry as SharedTimelineEntry } from '@/lib/web/timeline'
 
 // ---- API response shapes (subset this page reads) -------------------------
 
@@ -56,6 +66,15 @@ interface Completion {
 interface CompletionsResponse {
   completions: Completion[]
 }
+interface DeductionsResponse {
+  deductions: Deduction[]
+}
+
+/**
+ * The timeline mixes two record types. `at` is the single sort/group key so a
+ * deduction lands in the right day next to the chores around it.
+ */
+type TimelineEntry = SharedTimelineEntry<Completion, Deduction>
 interface WeeklyChild {
   userId: string
   name: string
@@ -69,6 +88,10 @@ interface UnapproveResponse {
   progress: { totalXp: number; level: number; previousLevel: number; leveledDown: boolean }
   revokedBadges: { id: string; name: string; emoji: string }[]
 }
+interface CancelDeductionResponse {
+  deduction: Deduction
+  restored: number
+}
 
 // Completion status → StatusChip status (StatusChip has no "approved").
 const STATUS_CHIP: Record<Completion['status'], ChoreStatus> = {
@@ -81,6 +104,7 @@ const STATUS_CHIP: Record<Completion['status'], ChoreStatus> = {
 
 export default function HistoryPage() {
   const [entries, setEntries] = useState<Completion[] | null>(null)
+  const [deductions, setDeductions] = useState<Deduction[] | null>(null)
   const [children, setChildren] = useState<WeeklyChild[]>([])
   const [childFilter, setChildFilter] = useState<string>('') // '' = ทุกคน
   const [error, setError] = useState<string | null>(null)
@@ -92,6 +116,10 @@ export default function HistoryPage() {
   const [undoTarget, setUndoTarget] = useState<Completion | null>(null)
   const [undoBusy, setUndoBusy] = useState(false)
   const [undoError, setUndoError] = useState<string | null>(null)
+  // Cancel-deduction: same shape, its own dialog.
+  const [cancelTarget, setCancelTarget] = useState<Deduction | null>(null)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [cancelError, setCancelError] = useState<string | null>(null)
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
 
   // Load the children list once (drives the filter dropdown).
@@ -117,19 +145,22 @@ export default function HistoryPage() {
     background.current = false
     if (!silent) {
       setEntries(null)
+      setDeductions(null)
       setError(null)
     }
 
-    const path = childFilter
-      ? `/api/completions?child=${encodeURIComponent(childFilter)}`
-      : '/api/completions'
+    const suffix = childFilter ? `?child=${encodeURIComponent(childFilter)}` : ''
 
+    // Fetched independently of deductions below: this page worked on
+    // completions alone before deductions existed, and a failure on the new
+    // /api/deductions endpoint must not blank out completions that already
+    // loaded fine.
     api
-      .get<CompletionsResponse>(path)
-      .then((res) => {
+      .get<CompletionsResponse>(`/api/completions${suffix}`)
+      .then((comps) => {
         if (!alive) return
         // Endpoint sorts submittedAt asc; the timeline reads newest-first.
-        const sorted = [...res.completions].sort(
+        const sorted = [...comps.completions].sort(
           (a, b) =>
             new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime(),
         )
@@ -144,6 +175,16 @@ export default function HistoryPage() {
             : 'โหลดประวัติไม่สำเร็จ ลองรีเฟรชอีกครั้ง',
         )
         setEntries([])
+      })
+
+    api
+      .get<DeductionsResponse>(`/api/deductions${suffix}`)
+      .then((deds) => {
+        if (alive) setDeductions(deds.deductions)
+      })
+      .catch(() => {
+        // Non-fatal: the chore timeline still works without deduction rows.
+        if (alive) setDeductions([])
       })
 
     return () => {
@@ -214,13 +255,64 @@ export default function HistoryPage() {
     }
   }
 
+  // ---- Cancel a deduction --------------------------------------------------
+
+  const askCancel = useCallback((entry: Deduction) => {
+    setCancelError(null)
+    setCancelTarget(entry)
+  }, [])
+
+  async function confirmCancel() {
+    if (!cancelTarget) return
+    const entry = cancelTarget
+    setCancelBusy(true)
+    setCancelError(null)
+    try {
+      const res = await api.post<CancelDeductionResponse>(`/api/deductions/${entry.id}/cancel`)
+      // Patch the row in place so the change is visible immediately, then let a
+      // silent refetch reconcile with the server.
+      setDeductions((prev) =>
+        prev ? prev.map((d) => (d.id === entry.id ? res.deduction : d)) : prev,
+      )
+      setCancelTarget(null)
+      background.current = true
+      setReloadKey((k) => k + 1)
+
+      setToast({
+        kind: 'success',
+        text: `ยกเลิกการหักคะแนนของ${entry.child.name}แล้ว — คืน ${res.restored.toLocaleString()} XP`,
+      })
+    } catch (err) {
+      setCancelError(
+        err instanceof ApiError ? err.message : 'ยกเลิกไม่สำเร็จ ลองใหม่อีกครั้ง',
+      )
+    } finally {
+      setCancelBusy(false)
+    }
+  }
+
+  // Merge both record kinds onto one axis, newest-first, then group by day.
+  const timeline = useMemo<TimelineEntry[]>(
+    () =>
+      mergeTimeline(
+        entries ?? [],
+        deductions ?? [],
+        (c) => new Date(c.submittedAt).getTime(),
+        (d) => new Date(d.createdAt).getTime(),
+      ),
+    [entries, deductions],
+  )
+
   // Group the sorted entries under a per-day header for a scannable timeline.
-  const groups = useMemo(() => groupByDay(entries ?? []), [entries])
+  const groups = useMemo(() => groupByDay(timeline), [timeline])
 
   // Four KPI stat cards (design S8): งานเดือนนี้ / XP รวม / อัตราตรงเวลา / รูป.
+  // Deliberately still chore-only — the "XP เดือนนี้" card is what the kids
+  // EARNED, and netting deductions into it would quietly change what an
+  // existing card means.
   const stats = useMemo(() => computeStats(entries ?? []), [entries])
 
-  const loading = entries === null && error === null
+  const loading = (entries === null || deductions === null) && error === null
 
   return (
     <div className="space-y-6">
@@ -277,13 +369,26 @@ export default function HistoryPage() {
 
       {loading ? (
         <TimelineSkeleton />
-      ) : entries && entries.length === 0 && !error ? (
+      ) : timeline.length === 0 && !error ? (
         <EmptyState hasFilter={childFilter !== ''} />
       ) : (
         <div className="space-y-8">
           {groups.map((group) => {
             const dayXp = group.items.reduce(
-              (sum, e) => sum + (e.status === 'approved' ? (e.xpAwarded ?? 0) : 0),
+              (sum, e) =>
+                sum +
+                (e.kind === 'completion' && e.completion.status === 'approved'
+                  ? (e.completion.xpAwarded ?? 0)
+                  : 0),
+              0,
+            )
+            // Kept separate from dayXp rather than netted: "+120 / -30" tells the
+            // parent what happened; a single "+90" hides the deduction entirely.
+            // Cancelled deductions are excluded — the XP they took is back, so
+            // they no longer belong in a total of what left the balance that day.
+            const dayDeducted = group.items.reduce(
+              (sum, e) =>
+                sum + (e.kind === 'deduction' && !e.deduction.cancelledAt ? e.deduction.applied : 0),
               0,
             )
             return (
@@ -291,18 +396,40 @@ export default function HistoryPage() {
                 <h2 className="sticky top-0 z-[1] -mx-1 flex items-center justify-between gap-2 bg-cream-100/80 px-1 py-1 backdrop-blur">
                   <span className="text-sm font-extrabold text-ink-600">
                     {group.label}
-                    <span className="ml-2 font-bold text-ink-400">{group.items.length} งาน</span>
-                  </span>
-                  {dayXp > 0 && (
-                    <span className="text-sm font-black text-xp-700">
-                      +{dayXp.toLocaleString()} XP
+                    <span className="ml-2 font-bold text-ink-400">
+                      {group.items.length} รายการ
                     </span>
-                  )}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    {dayXp > 0 && (
+                      <span className="text-sm font-black text-xp-700">
+                        +{dayXp.toLocaleString()} XP
+                      </span>
+                    )}
+                    {dayDeducted > 0 && (
+                      <span className="text-sm font-black text-danger-500">
+                        -{dayDeducted.toLocaleString()} XP
+                      </span>
+                    )}
+                  </span>
                 </h2>
                 <ol className="space-y-3">
-                  {group.items.map((entry) => (
-                    <TimelineRow key={entry.id} entry={entry} onUndo={askUndo} />
-                  ))}
+                  {group.items.map((entry) =>
+                    entry.kind === 'completion' ? (
+                      <TimelineRow
+                        key={`c-${entry.completion.id}`}
+                        entry={entry.completion}
+                        onUndo={askUndo}
+                      />
+                    ) : (
+                      <DeductionRow
+                        key={`d-${entry.deduction.id}`}
+                        deduction={entry.deduction}
+                        showChild
+                        onCancel={askCancel}
+                      />
+                    ),
+                  )}
                 </ol>
               </section>
             )
@@ -340,6 +467,33 @@ export default function HistoryPage() {
           <li className="text-ink-500">
             ถ้าเป็นงานเดียวที่อนุมัติของวันนั้น วันนั้นจะไม่ถูกนับในสตรีคอีก
           </li>
+        </ul>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={cancelTarget !== null}
+        title="ยกเลิกการหักคะแนน?"
+        icon="➖"
+        tone="danger"
+        confirmLabel="ยกเลิก"
+        cancelLabel="ไม่ใช่ตอนนี้"
+        busy={cancelBusy}
+        error={cancelError}
+        message={
+          cancelTarget
+            ? `${cancelTarget.child.name} จะได้ ${cancelTarget.applied.toLocaleString()} XP คืน`
+            : undefined
+        }
+        onConfirm={confirmCancel}
+        onCancel={() => {
+          if (cancelBusy) return
+          setCancelTarget(null)
+          setCancelError(null)
+        }}
+      >
+        <ul className="list-disc space-y-1 pl-5 text-sm font-semibold text-ink-600 marker:text-ink-400">
+          <li>เหตุผลเดิม: “{cancelTarget?.reason}”</li>
+          <li className="text-ink-500">รายการนี้จะยังอยู่ในประวัติ พร้อมป้าย “ยกเลิกแล้ว”</li>
         </ul>
       </ConfirmDialog>
 
@@ -487,12 +641,6 @@ function TimelineSkeleton() {
 
 // ---- Grouping + formatting helpers ----------------------------------------
 
-interface DayGroup {
-  key: string
-  label: string
-  items: Completion[]
-}
-
 /** The four KPI figures shown above the timeline (design S8). */
 interface HistoryStats {
   monthCount: number
@@ -520,50 +668,10 @@ function computeStats(items: Completion[]): HistoryStats {
   }
 }
 
-/** Bucket already-sorted (desc) completions under a per-day header. */
-function groupByDay(items: Completion[]): DayGroup[] {
-  const groups: DayGroup[] = []
-  let current: DayGroup | null = null
-
-  for (const item of items) {
-    const d = new Date(item.submittedAt)
-    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
-    if (!current || current.key !== key) {
-      current = { key, label: formatDay(d), items: [] }
-      groups.push(current)
-    }
-    current.items.push(item)
-  }
-  return groups
-}
-
-const DAY_FMT = new Intl.DateTimeFormat('th-TH', {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-})
 const TIME_FMT = new Intl.DateTimeFormat('th-TH', {
   hour: '2-digit',
   minute: '2-digit',
 })
-
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  )
-}
-
-function formatDay(d: Date): string {
-  const now = new Date()
-  if (isSameDay(d, now)) return 'วันนี้'
-  const yesterday = new Date(now)
-  yesterday.setDate(now.getDate() - 1)
-  if (isSameDay(d, yesterday)) return 'เมื่อวาน'
-  return DAY_FMT.format(d)
-}
 
 function formatTime(iso: string): string {
   return `${TIME_FMT.format(new Date(iso))} น.`
