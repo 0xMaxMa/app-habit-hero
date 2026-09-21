@@ -11,10 +11,10 @@
  *
  * It is also the one place a parent can take XP back off a child
  * (DeductPointsCard → POST /api/deductions); those entries are folded into the
- * same timeline, tinted danger so they never read as an earning. A deduction
- * can be undone right there too (POST /api/deductions/:id/cancel) — no time
- * limit — which restores the XP it actually took and marks the row cancelled
- * in place rather than deleting it or writing a second offsetting entry.
+ * same timeline, tinted danger so they never read as an earning. The timeline
+ * here is read-only otherwise (no action on any row, chore or deduction), so
+ * a deduction is undone from the "ประวัติงานบ้าน" history page instead — a
+ * plain refetch on return picks up the restored XP, no cross-page live sync.
  *
  * Data:
  *   • GET /api/progress?user=<id>        → name, xp, level, xpToNext, streak, avatar
@@ -22,7 +22,6 @@
  *   • GET /api/chores/today?child=<id>   → still-pending chores today
  *   • GET /api/completions?child=<id>    → activity timeline + this-week strip
  *   • GET /api/deductions?child=<id>     → point-deduction entries for the timeline
- *   • POST /api/deductions/:id/cancel    → undo one of those deductions
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -33,7 +32,6 @@ import {
   BadgeChip,
   Button,
   Card,
-  ConfirmDialog,
   PhotoThumb,
   ProgressBar,
   XpBadge,
@@ -92,14 +90,6 @@ interface CompletionsResponse {
 interface DeductionsResponse {
   deductions: Deduction[]
 }
-interface CancelDeductionResponse {
-  deduction: Deduction
-  restored: number
-  xp: number
-  level: number
-  xpToNext: number
-  leveledUp: boolean
-}
 
 // ---- Date helpers (local calendar) ----------------------------------------
 
@@ -151,10 +141,6 @@ export default function ChildProfilePage() {
   const [deductions, setDeductions] = useState<Deduction[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
-  // Cancel-deduction: the row awaiting confirmation, plus its in-flight state.
-  const [cancelTarget, setCancelTarget] = useState<Deduction | null>(null)
-  const [cancelBusy, setCancelBusy] = useState(false)
-  const [cancelError, setCancelError] = useState<string | null>(null)
   // Bumping this key re-runs the loader; `background` marks a silent refresh.
   const [reloadKey, setReloadKey] = useState(0)
   const background = useRef(false)
@@ -245,45 +231,6 @@ export default function ChildProfilePage() {
     )
     background.current = true
     setReloadKey((k) => k + 1)
-  }
-
-  function askCancel(deduction: Deduction) {
-    setCancelError(null)
-    setCancelTarget(deduction)
-  }
-
-  /** A cancel just landed: reflect the row + XP immediately, then reconcile silently. */
-  async function confirmCancel() {
-    if (!cancelTarget) return
-    const target = cancelTarget
-    setCancelBusy(true)
-    setCancelError(null)
-    try {
-      const res = await api.post<CancelDeductionResponse>(
-        `/api/deductions/${target.id}/cancel`,
-      )
-      setDeductions((prev) =>
-        prev ? prev.map((d) => (d.id === target.id ? res.deduction : d)) : prev,
-      )
-      setProgress((prev) =>
-        prev
-          ? { ...prev, xp: res.xp, level: res.level, xpToNext: res.xpToNext, rank: rankName(res.level) }
-          : prev,
-      )
-      setCancelTarget(null)
-      setToast(
-        `ยกเลิกการหักคะแนนแล้ว — คืน ${res.restored.toLocaleString()} XP` +
-          (res.leveledUp ? ` · Level ขึ้นเป็น ${res.level}` : ''),
-      )
-      background.current = true
-      setReloadKey((k) => k + 1)
-    } catch (err) {
-      setCancelError(
-        err instanceof ApiError ? err.message : 'ยกเลิกไม่สำเร็จ ลองใหม่อีกครั้ง',
-      )
-    } finally {
-      setCancelBusy(false)
-    }
   }
 
   if (error) {
@@ -521,7 +468,7 @@ export default function ChildProfilePage() {
                           min-content the WHOLE title, pushing the card, the main
                           column and the page wider than the phone. */}
                       {entry.kind === 'deduction' ? (
-                        <DeductionTimelineBody deduction={entry.deduction} onCancel={askCancel} />
+                        <DeductionTimelineBody deduction={entry.deduction} />
                       ) : (
                         <CompletionTimelineBody completion={entry.completion} />
                       )}
@@ -580,33 +527,6 @@ export default function ChildProfilePage() {
         </div>
       </div>
 
-      <ConfirmDialog
-        open={cancelTarget !== null}
-        title="ยกเลิกการหักคะแนน?"
-        icon="➖"
-        tone="danger"
-        confirmLabel="ยกเลิก"
-        cancelLabel="ไม่ใช่ตอนนี้"
-        busy={cancelBusy}
-        error={cancelError}
-        message={
-          cancelTarget
-            ? `${progress.name} จะได้ ${cancelTarget.applied.toLocaleString()} XP คืน`
-            : undefined
-        }
-        onConfirm={confirmCancel}
-        onCancel={() => {
-          if (cancelBusy) return
-          setCancelTarget(null)
-          setCancelError(null)
-        }}
-      >
-        <ul className="list-disc space-y-1 pl-5 text-sm font-semibold text-ink-600 marker:text-ink-400">
-          <li>เหตุผลเดิม: “{cancelTarget?.reason}”</li>
-          <li className="text-ink-500">รายการนี้จะยังอยู่ในไทม์ไลน์ พร้อมป้าย “ยกเลิกแล้ว”</li>
-        </ul>
-      </ConfirmDialog>
-
       {toast && (
         <div
           role="status"
@@ -644,17 +564,12 @@ function CompletionTimelineBody({ completion }: { completion: Completion }) {
 /**
  * A point-deduction row. Same rail as a completion, but danger-tinted and it
  * leads with the reason — on this page the parent already knows they did it;
- * what matters when scrolling back is WHY. (The list pages use the fuller
- * `DeductionRow`.) A cancelled row shows a "ยกเลิกแล้ว" badge in place of the
- * XP pill and struck-through text instead of the "ยกเลิก" button.
+ * what matters when scrolling back is WHY. Read-only, like every other row in
+ * this timeline — cancelling a deduction is only offered on the "ประวัติงานบ้าน"
+ * history page (the fuller `DeductionRow`). A cancelled row shows a
+ * "ยกเลิกแล้ว" badge in place of the XP pill and struck-through text.
  */
-function DeductionTimelineBody({
-  deduction,
-  onCancel,
-}: {
-  deduction: Deduction
-  onCancel: (deduction: Deduction) => void
-}) {
+function DeductionTimelineBody({ deduction }: { deduction: Deduction }) {
   const cancelled = deduction.cancelledAt !== null
   return (
     <div
@@ -680,17 +595,6 @@ function DeductionTimelineBody({
             : ''}
           {cancelled ? ` · คืน ${deduction.applied.toLocaleString()} XP แล้ว` : ''}
         </p>
-        {!cancelled && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="mt-1 px-0 text-danger-500 hover:bg-transparent hover:underline"
-            onClick={() => onCancel(deduction)}
-          >
-            ยกเลิก
-          </Button>
-        )}
       </div>
       {cancelled ? (
         <span className="whitespace-nowrap rounded-pill bg-cream-300 px-2.5 py-1 text-xs font-black text-ink-600">

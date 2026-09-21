@@ -88,12 +88,10 @@ export function DeductionRow({
               </h4>
               <p className="mt-0.5 text-sm font-semibold text-ink-600">{meta}</p>
             </div>
-            {cancelled ? (
+            {cancelled && (
               <span className="rounded-pill bg-cream-300 px-2.5 py-1 text-xs font-black text-ink-600">
                 ยกเลิกแล้ว
               </span>
-            ) : (
-              <XpBadge value={-d.applied} tone="penalty" size="sm" />
             )}
           </div>
 
@@ -122,16 +120,23 @@ export function DeductionRow({
             </p>
           )}
 
-          {!cancelled && onCancel && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="mt-2 text-danger-500 hover:bg-danger-100"
-              onClick={() => onCancel(d)}
-            >
-              ยกเลิก
-            </Button>
+          {/* XP tag bottom-left, cancel action bottom-right (`ml-auto`) — same
+              row shape as a completed chore's "+N XP" tag / "ยกเลิกอนุมัติ" button. */}
+          {!cancelled && (
+            <div className="mt-2 flex items-center gap-1.5">
+              <XpBadge value={-d.applied} tone="penalty" size="sm" />
+              {onCancel && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto text-danger-500 hover:bg-danger-100"
+                  onClick={() => onCancel(d)}
+                >
+                  ยกเลิก
+                </Button>
+              )}
+            </div>
           )}
         </div>
       </Card>
