@@ -133,7 +133,7 @@ export function DeductionRow({
                   className="ml-auto text-danger-500 hover:bg-danger-100"
                   onClick={() => onCancel(d)}
                 >
-                  ยกเลิก
+                  ↩️ ยกเลิก
                 </Button>
               )}
             </div>
