@@ -41,6 +41,7 @@ import {
   ConfirmDialog,
   PhotoThumb,
   StatusChip,
+  ViewModeToggle,
   XpBadge,
   cn,
   type ChoreStatus,
@@ -49,6 +50,7 @@ import { DeductionRow, type Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
 import { mergeTimeline, groupByDay, type TimelineEntry as SharedTimelineEntry } from '@/lib/web/timeline'
+import { useViewModePreference } from '@/lib/web/useViewModePreference'
 
 // ---- API response shapes (subset this page reads) -------------------------
 
@@ -121,6 +123,7 @@ export default function HistoryPage() {
   const [cancelBusy, setCancelBusy] = useState(false)
   const [cancelError, setCancelError] = useState<string | null>(null)
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+  const [viewMode, setViewMode] = useViewModePreference('parent-history-timeline')
 
   // Load the children list once (drives the filter dropdown).
   useEffect(() => {
@@ -343,6 +346,8 @@ export default function HistoryPage() {
             </select>
           </label>
         )}
+
+        <ViewModeToggle mode={viewMode} onChange={setViewMode} />
       </header>
 
       {/* KPI stat cards */}
@@ -413,24 +418,46 @@ export default function HistoryPage() {
                     )}
                   </span>
                 </h2>
-                <ol className="space-y-3">
-                  {group.items.map((entry) =>
-                    entry.kind === 'completion' ? (
-                      <TimelineRow
-                        key={`c-${entry.completion.id}`}
-                        entry={entry.completion}
-                        onUndo={askUndo}
-                      />
-                    ) : (
-                      <DeductionRow
-                        key={`d-${entry.deduction.id}`}
-                        deduction={entry.deduction}
-                        showChild
-                        onCancel={askCancel}
-                      />
-                    ),
-                  )}
-                </ol>
+                {viewMode === 'grid' ? (
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {group.items.map((entry) =>
+                      entry.kind === 'completion' ? (
+                        <TimelineTile
+                          key={`c-${entry.completion.id}`}
+                          entry={entry.completion}
+                          onUndo={askUndo}
+                        />
+                      ) : (
+                        <DeductionRow
+                          key={`d-${entry.deduction.id}`}
+                          deduction={entry.deduction}
+                          showChild
+                          onCancel={askCancel}
+                          layout="grid"
+                        />
+                      ),
+                    )}
+                  </div>
+                ) : (
+                  <ol className="space-y-3">
+                    {group.items.map((entry) =>
+                      entry.kind === 'completion' ? (
+                        <TimelineRow
+                          key={`c-${entry.completion.id}`}
+                          entry={entry.completion}
+                          onUndo={askUndo}
+                        />
+                      ) : (
+                        <DeductionRow
+                          key={`d-${entry.deduction.id}`}
+                          deduction={entry.deduction}
+                          showChild
+                          onCancel={askCancel}
+                        />
+                      ),
+                    )}
+                  </ol>
+                )}
               </section>
             )
           })}
@@ -597,6 +624,56 @@ function TimelineRow({
         </div>
       </Card>
     </li>
+  )
+}
+
+/** Grid-view tile counterpart of TimelineRow — same fields + undo action. */
+function TimelineTile({
+  entry,
+  onUndo,
+}: {
+  entry: Completion
+  onUndo: (entry: Completion) => void
+}) {
+  const xp =
+    entry.status === 'approved' && entry.xpAwarded != null
+      ? entry.xpAwarded
+      : entry.chore.xpValue
+
+  return (
+    <div role="listitem">
+      <Card padding="sm" className="flex flex-col items-center gap-2 p-3 text-center">
+        <PhotoThumb photoUrl={entry.photoUrl} title={entry.chore.title} size="md" />
+        <div className="w-full min-w-0">
+          <h3 className="truncate text-sm font-extrabold text-ink-900">{entry.chore.title}</h3>
+          <p className="mt-0.5 flex items-center justify-center gap-1.5 text-xs font-semibold text-ink-600">
+            <Avatar src={entry.child.avatarUrl} character="fox" name={entry.child.name} size="sm" />
+            <span className="truncate">
+              {entry.child.name} · {formatTime(entry.submittedAt)}
+            </span>
+          </p>
+        </div>
+        <StatusChip status={STATUS_CHIP[entry.status]} size="sm" />
+        <div className="flex flex-wrap items-center justify-center gap-1.5">
+          <XpBadge value={xp} size="sm" />
+          {entry.status === 'approved' && (
+            <span className="rounded-pill bg-success-100 px-2 py-0.5 text-xs font-bold text-success-500">
+              +{xp} XP
+            </span>
+          )}
+        </div>
+        {entry.status === 'approved' && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full text-danger-500 hover:bg-danger-100"
+            onClick={() => onUndo(entry)}
+          >
+            ↩️ ยกเลิกอนุมัติ
+          </Button>
+        )}
+      </Card>
+    </div>
   )
 }
 

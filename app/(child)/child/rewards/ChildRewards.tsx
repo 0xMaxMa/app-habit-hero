@@ -19,9 +19,19 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Card, ConfirmDialog, StatusChip, XpBadge, cn, type ChoreStatus } from '@/components/ui'
+import {
+  Button,
+  Card,
+  ConfirmDialog,
+  StatusChip,
+  ViewModeToggle,
+  XpBadge,
+  cn,
+  type ChoreStatus,
+} from '@/components/ui'
 import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
+import { useViewModePreference } from '@/lib/web/useViewModePreference'
 
 interface Reward {
   id: string
@@ -62,6 +72,8 @@ export function ChildRewards({ childId }: { childId: string }) {
   const [pendingRedeem, setPendingRedeem] = useState<Reward | null>(null)
   // Per-reward shortfall message after a "not enough" attempt.
   const [shortfalls, setShortfalls] = useState<Record<string, number>>({})
+  const [catalogMode, setCatalogMode] = useViewModePreference('child-rewards-catalog')
+  const [requestsMode, setRequestsMode] = useViewModePreference('child-rewards-requests')
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false
@@ -154,6 +166,11 @@ export function ChildRewards({ childId }: { childId: string }) {
 
       {/* Catalog */}
       <section aria-label="รางวัลที่แลกได้" className="space-y-3">
+        {rewards !== null && rewards.length > 0 && (
+          <div className="flex justify-end">
+            <ViewModeToggle mode={catalogMode} onChange={setCatalogMode} />
+          </div>
+        )}
         {rewards === null ? (
           <div className="space-y-3">
             <RewardSkeleton />
@@ -167,6 +184,20 @@ export function ChildRewards({ childId }: { childId: string }) {
               บอกพ่อแม่ให้เพิ่มรางวัลเจ๋ง ๆ ไว้ให้แลกนะ
             </p>
           </Card>
+        ) : catalogMode === 'grid' ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {rewards.map((reward) => (
+              <RewardTile
+                key={reward.id}
+                reward={reward}
+                canAfford={available != null && available >= reward.xpCost}
+                shortfall={shortfalls[reward.id]}
+                busy={busyId === reward.id}
+                disabled={busyId !== null}
+                onRedeem={() => setPendingRedeem(reward)}
+              />
+            ))}
+          </div>
         ) : (
           rewards.map((reward) => {
             const canAfford = available != null && available >= reward.xpCost
@@ -218,23 +249,47 @@ export function ChildRewards({ childId }: { childId: string }) {
       {/* My requests */}
       {requests.length > 0 && (
         <section aria-label="คำขอแลกรางวัลของฉัน" className="space-y-3">
-          <h2 className="text-lg font-extrabold text-ink-900">คำขอของฉัน</h2>
-          <div className="space-y-2">
-            {requests.map((r) => (
-              <Card key={r.id} padding="md" className="flex items-center gap-3">
-                <span className="text-2xl" aria-hidden>
-                  {r.reward.iconEmoji || '🎁'}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-extrabold text-ink-900">{r.reward.title}</p>
-                  <p className="text-xs font-semibold text-ink-600">
-                    ใช้ {r.xpSpent.toLocaleString()} XP · {STATUS_LABEL[r.status]}
-                  </p>
-                </div>
-                <StatusChip status={STATUS_CHIP[r.status]} size="sm" />
-              </Card>
-            ))}
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-lg font-extrabold text-ink-900">คำขอของฉัน</h2>
+            <ViewModeToggle mode={requestsMode} onChange={setRequestsMode} />
           </div>
+          {requestsMode === 'grid' ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {requests.map((r) => (
+                <div key={r.id} role="listitem">
+                  <Card padding="sm" className="flex flex-col items-center gap-2 p-3 text-center">
+                    <span className="text-3xl" aria-hidden>
+                      {r.reward.iconEmoji || '🎁'}
+                    </span>
+                    <div className="w-full min-w-0">
+                      <p className="truncate text-sm font-extrabold text-ink-900">{r.reward.title}</p>
+                      <p className="mt-0.5 truncate text-xs font-semibold text-ink-600">
+                        ใช้ {r.xpSpent.toLocaleString()} XP
+                      </p>
+                    </div>
+                    <StatusChip status={STATUS_CHIP[r.status]} size="sm" />
+                  </Card>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {requests.map((r) => (
+                <Card key={r.id} padding="md" className="flex items-center gap-3">
+                  <span className="text-2xl" aria-hidden>
+                    {r.reward.iconEmoji || '🎁'}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-extrabold text-ink-900">{r.reward.title}</p>
+                    <p className="text-xs font-semibold text-ink-600">
+                      ใช้ {r.xpSpent.toLocaleString()} XP · {STATUS_LABEL[r.status]}
+                    </p>
+                  </div>
+                  <StatusChip status={STATUS_CHIP[r.status]} size="sm" />
+                </Card>
+              ))}
+            </div>
+          )}
         </section>
       )}
 
@@ -268,6 +323,51 @@ export function ChildRewards({ childId }: { childId: string }) {
         </div>
       )}
     </div>
+  )
+}
+
+/** Grid-view tile for a reward — same data/action as the catalog row. */
+function RewardTile({
+  reward,
+  canAfford,
+  shortfall,
+  busy,
+  disabled,
+  onRedeem,
+}: {
+  reward: Reward
+  canAfford: boolean
+  shortfall: number | undefined
+  busy: boolean
+  disabled: boolean
+  onRedeem: () => void
+}) {
+  return (
+    <Card padding="sm" className="flex flex-col items-center gap-2 p-3 text-center">
+      <span
+        className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-cream-200 text-3xl"
+        aria-hidden
+      >
+        {reward.iconEmoji || '🎁'}
+      </span>
+      <div className="w-full min-w-0">
+        <h3 className="truncate text-sm font-extrabold text-ink-900">{reward.title}</h3>
+        <XpBadge value={reward.xpCost} size="sm" className="mt-1" />
+      </div>
+      {shortfall != null && (
+        <p className="text-xs font-bold text-danger-500">ขาดอีก {shortfall.toLocaleString()} XP</p>
+      )}
+      <Button
+        variant={canAfford ? 'primary' : 'secondary'}
+        size="sm"
+        className="w-full"
+        onClick={onRedeem}
+        disabled={disabled || !canAfford}
+        leftIcon={<span aria-hidden>{canAfford ? '🎉' : '🔒'}</span>}
+      >
+        {busy ? 'กำลังส่ง…' : canAfford ? 'แลกเลย' : 'ยังไม่พอ'}
+      </Button>
+    </Card>
   )
 }
 

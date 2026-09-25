@@ -25,6 +25,7 @@ import {
   Card,
   PhotoThumb,
   ProgressBar,
+  ViewModeToggle,
   XpBadge,
 } from '@/components/ui'
 import Link from 'next/link'
@@ -32,7 +33,9 @@ import { BadgeCelebration, type CelebratedBadge } from '@/components/BadgeCelebr
 import { api, ApiError } from '@/lib/web/api'
 import { downscaleImage } from '@/lib/web/image'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
+import { useViewModePreference } from '@/lib/web/useViewModePreference'
 import { levelInfo } from '@/lib/level'
+import { CATEGORY_META, type ChoreCategory } from '@/app/(parent)/chores/types'
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || ''
 
@@ -71,6 +74,7 @@ interface TodayChore {
   description: string | null
   xpValue: number
   requirePhoto: boolean
+  category: ChoreCategory
   isExtra: boolean
   dueTime: string | null
 }
@@ -147,6 +151,8 @@ export function ChildHome({
   const [celebrate, setCelebrate] = useState<CelebratedBadge[]>([])
   // Chore id currently being submitted → disables its button + shows a spinner.
   const [submitting, setSubmitting] = useState<string | null>(null)
+  const [choresMode, setChoresMode] = useViewModePreference('child-home-today')
+  const [timelineMode, setTimelineMode] = useViewModePreference('child-home-timeline')
 
   // A hidden file input reused for every "needs a photo" chore. We stash the
   // chore awaiting a photo here so the input's onChange knows what to submit.
@@ -421,13 +427,16 @@ export function ChildHome({
 
       {/* ---- Today's chores --------------------------------------------- */}
       <section aria-label="งานวันนี้" className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h2 className="text-lg font-extrabold text-ink-900">งานวันนี้</h2>
-          {chores && chores.length > 0 && (
-            <span className="rounded-pill bg-primary-300/30 px-3 py-1 text-sm font-extrabold text-primary-700">
-              เหลือ {chores.length} งาน
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {chores && chores.length > 0 && (
+              <span className="rounded-pill bg-primary-300/30 px-3 py-1 text-sm font-extrabold text-primary-700">
+                เหลือ {chores.length} งาน
+              </span>
+            )}
+            <ViewModeToggle mode={choresMode} onChange={setChoresMode} />
+          </div>
         </div>
 
         {chores === null && !error ? (
@@ -445,6 +454,18 @@ export function ChildHome({
               พักผ่อนได้เลย แล้วพรุ่งนี้มาลุยต่อ 💪
             </p>
           </Card>
+        ) : choresMode === 'grid' ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {chores?.map((chore) => (
+              <ChoreTile
+                key={chore.id}
+                chore={chore}
+                busy={submitting === chore.id}
+                disabled={submitting !== null}
+                onDone={() => onDone(chore)}
+              />
+            ))}
+          </div>
         ) : (
           <div className="space-y-3">
             {chores?.map((chore) => (
@@ -492,13 +513,57 @@ export function ChildHome({
       {/* ---- Activity timeline ------------------------------------------ */}
       {completions !== null && (
         <section aria-label="ไทม์ไลน์กิจกรรม" className="space-y-3">
-          <h2 className="text-lg font-extrabold text-ink-900">ไทม์ไลน์กิจกรรม</h2>
-          <Card>
-            {timeline.length === 0 ? (
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-lg font-extrabold text-ink-900">ไทม์ไลน์กิจกรรม</h2>
+            {timeline.length > 0 && (
+              <ViewModeToggle mode={timelineMode} onChange={setTimelineMode} />
+            )}
+          </div>
+          {timeline.length === 0 ? (
+            <Card>
               <p className="text-sm font-semibold text-ink-500">
                 ยังไม่มีกิจกรรม — เริ่มทำงานวันนี้กันเลย! 💪
               </p>
-            ) : (
+            </Card>
+          ) : timelineMode === 'grid' ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {timeline.slice(0, 15).map((c) => (
+                <div key={c.id} role="listitem">
+                  <Card padding="sm" className="flex flex-col items-center gap-2 p-3 text-center">
+                    {c.photoUrl ? (
+                      <PhotoThumb photoUrl={c.photoUrl} title={c.chore.title} size="md" />
+                    ) : (
+                      <span
+                        aria-hidden
+                        className={
+                          'grid h-14 w-14 place-items-center rounded-pill text-xl font-black ' +
+                          (c.status === 'approved'
+                            ? 'bg-success-100 text-success-500'
+                            : c.status === 'rejected'
+                              ? 'bg-danger-100 text-danger-500'
+                              : 'bg-cream-300 text-ink-500')
+                        }
+                      >
+                        {c.status === 'approved' ? '✓' : c.status === 'rejected' ? '✕' : '⏳'}
+                      </span>
+                    )}
+                    <div className="w-full min-w-0">
+                      <p className="truncate text-sm font-extrabold text-ink-900">
+                        {c.chore.title}
+                      </p>
+                      <p className="mt-0.5 truncate text-xs font-semibold text-ink-500">
+                        {timeLabel(c.submittedAt)} · {statusMeta(c.status)}
+                      </p>
+                    </div>
+                    <span className="text-sm font-black text-xp-600">
+                      +{(c.xpAwarded ?? c.chore.xpValue).toLocaleString()} XP
+                    </span>
+                  </Card>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Card>
               <ul className="space-y-0">
                 {timeline.slice(0, 15).map((c, i, arr) => (
                   <li key={c.id} className="flex gap-3.5 pb-4 last:pb-0">
@@ -540,8 +605,8 @@ export function ChildHome({
                   </li>
                 ))}
               </ul>
-            )}
-          </Card>
+            </Card>
+          )}
         </section>
       )}
 
@@ -619,6 +684,62 @@ function ChoreRow({
           : chore.requirePhoto
             ? 'แนบรูป แล้วส่งงาน'
             : 'ทำเสร็จแล้ว'}
+      </Button>
+    </Card>
+  )
+}
+
+/** Grid-view tile for a chore — same data/actions as ChoreRow, stacked
+ *  around the category emoji (a chore has no photo of its own). */
+function ChoreTile({
+  chore,
+  busy,
+  disabled,
+  onDone,
+}: {
+  chore: TodayChore
+  busy: boolean
+  disabled: boolean
+  onDone: () => void
+}) {
+  const meta = CATEGORY_META[chore.category]
+  return (
+    <Card
+      padding="sm"
+      className={
+        'flex flex-col items-center gap-2 p-3 text-center' +
+        (chore.isExtra ? ' border-xp-500/40 bg-xp-100/40' : '')
+      }
+    >
+      <span
+        aria-hidden
+        className="grid h-14 w-14 place-items-center rounded-2xl bg-cream-200 text-2xl"
+      >
+        {meta.emoji}
+      </span>
+      <div className="w-full min-w-0">
+        <p className="truncate text-sm font-extrabold text-ink-900">{chore.title}</p>
+        {chore.isExtra && (
+          <span className="mt-1 inline-block rounded-pill bg-xp-300/40 px-2 py-0.5 text-xs font-extrabold text-ink-900">
+            งานพิเศษ
+          </span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-1.5">
+        <XpBadge value={chore.xpValue} size="sm" />
+        {chore.dueTime && (
+          <span className="text-xs font-bold text-ink-500">⏰ {chore.dueTime}</span>
+        )}
+      </div>
+      <Button
+        variant="primary"
+        size="sm"
+        className="w-full"
+        onClick={onDone}
+        disabled={disabled}
+        leftIcon={<span aria-hidden>{busy ? '⏳' : '✅'}</span>}
+      >
+        {busy ? 'กำลังส่ง…' : chore.requirePhoto ? 'แนบรูป' : 'ทำเสร็จแล้ว'}
       </Button>
     </Card>
   )

@@ -12,6 +12,11 @@
  * BOTH the parent and child side, so a kid never sees a normal-looking penalty
  * that was actually undone. Only a caller that passes `onCancel` gets the
  * "ยกเลิก" button (the parent surfaces); the child's own page never does.
+ *
+ * `layout="grid"` renders the same data as a compact, thumbnail-forward tile
+ * for the list pages' grid view mode (ViewModeToggle) — same fields and the
+ * same cancel action, just stacked vertically to sit in a grid column instead
+ * of a full-width row.
  */
 
 import { Button, Card, XpBadge } from '@/components/ui'
@@ -47,12 +52,15 @@ export function DeductionRow({
   /** Renders the "ยกเลิก" button and receives the row when it's clicked. Omit
    *  on the child's page — a kid must never be offered this action. */
   onCancel,
+  /** 'grid' renders a compact vertical tile instead of a full-width row. */
+  layout = 'row',
 }: {
   deduction: Deduction
   showChild?: boolean
   showBy?: boolean
   kidVoice?: boolean
   onCancel?: (deduction: Deduction) => void
+  layout?: 'row' | 'grid'
 }) {
   const d = deduction
   const who = d.by?.name ?? 'ผู้ปกครอง'
@@ -65,6 +73,69 @@ export function DeductionRow({
     .filter(Boolean)
     .join(' · ')
 
+  const icon = (
+    <span
+      aria-hidden
+      className={
+        layout === 'grid'
+          ? 'grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-danger-100 text-2xl text-danger-500'
+          : 'grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-danger-100 text-lg text-danger-500'
+      }
+    >
+      ➖
+    </span>
+  )
+
+  const cancelButton = onCancel && !cancelled && (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className={layout === 'grid' ? 'w-full text-danger-500 hover:bg-danger-100' : 'ml-auto text-danger-500 hover:bg-danger-100'}
+      onClick={() => onCancel(d)}
+    >
+      ↩️ ยกเลิก
+    </Button>
+  )
+
+  if (layout === 'grid') {
+    return (
+      <div role="listitem">
+        <Card
+          padding="sm"
+          className={
+            'flex flex-col items-center gap-2 border-danger-500/30 p-3 text-center' +
+            (cancelled ? ' bg-cream-100 opacity-70' : ' bg-danger-100/60')
+          }
+        >
+          {icon}
+          <div className="w-full min-w-0">
+            <h4 className="truncate text-sm font-extrabold text-ink-900">
+              {cancelled ? <span className="line-through">หักคะแนน</span> : 'หักคะแนน'}
+            </h4>
+            <p className="mt-0.5 truncate text-xs font-semibold text-ink-600">{meta}</p>
+            <p
+              className={
+                'mt-1 line-clamp-2 text-xs font-semibold text-ink-900' +
+                (cancelled ? ' line-through' : '')
+              }
+            >
+              {d.reason}
+            </p>
+          </div>
+          {cancelled ? (
+            <span className="rounded-pill bg-cream-300 px-2.5 py-1 text-xs font-black text-ink-600">
+              ยกเลิกแล้ว
+            </span>
+          ) : (
+            <XpBadge value={-d.applied} tone="penalty" size="sm" />
+          )}
+          {cancelButton}
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <li>
       <Card
@@ -74,12 +145,7 @@ export function DeductionRow({
           (cancelled ? ' bg-cream-100 opacity-70' : ' bg-danger-100/60')
         }
       >
-        <span
-          aria-hidden
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-danger-100 text-lg text-danger-500"
-        >
-          ➖
-        </span>
+        {icon}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0">
@@ -125,17 +191,7 @@ export function DeductionRow({
           {!cancelled && (
             <div className="mt-2 flex items-center gap-1.5">
               <XpBadge value={-d.applied} tone="penalty" size="sm" />
-              {onCancel && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="ml-auto text-danger-500 hover:bg-danger-100"
-                  onClick={() => onCancel(d)}
-                >
-                  ↩️ ยกเลิก
-                </Button>
-              )}
+              {cancelButton}
             </div>
           )}
         </div>
