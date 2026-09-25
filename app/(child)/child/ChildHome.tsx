@@ -30,6 +30,7 @@ import {
 } from '@/components/ui'
 import Link from 'next/link'
 import { BadgeCelebration, type CelebratedBadge } from '@/components/BadgeCelebration'
+import { ChoreTile } from '@/components/ChoreTile'
 import { DeductionRow, type Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { downscaleImage } from '@/lib/web/image'
@@ -37,7 +38,7 @@ import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
 import { mergeTimeline, type TimelineEntry as SharedTimelineEntry } from '@/lib/web/timeline'
 import { useViewModePreference } from '@/lib/web/useViewModePreference'
 import { levelInfo } from '@/lib/level'
-import { CATEGORY_META, type ChoreCategory } from '@/app/(parent)/chores/types'
+import { type ChoreCategory } from '@/app/(parent)/chores/types'
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || ''
 
@@ -552,7 +553,7 @@ export function ChildHome({
               </p>
             </Card>
           ) : timelineMode === 'grid' ? (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div role="list" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {timeline.slice(0, 15).map((entry) =>
                 entry.kind === 'deduction' ? (
                   // kidVoice: reads as something that happened TO them, which is
@@ -742,62 +743,6 @@ function ChoreRow({
           : chore.requirePhoto
             ? 'แนบรูป แล้วส่งงาน'
             : 'ทำเสร็จแล้ว'}
-      </Button>
-    </Card>
-  )
-}
-
-/** Grid-view tile for a chore — same data/actions as ChoreRow, stacked
- *  around the category emoji (a chore has no photo of its own). */
-function ChoreTile({
-  chore,
-  busy,
-  disabled,
-  onDone,
-}: {
-  chore: TodayChore
-  busy: boolean
-  disabled: boolean
-  onDone: () => void
-}) {
-  const meta = CATEGORY_META[chore.category]
-  return (
-    <Card
-      padding="sm"
-      className={
-        'flex flex-col items-center gap-2 p-3 text-center' +
-        (chore.isExtra ? ' border-xp-500/40 bg-xp-100/40' : '')
-      }
-    >
-      <span
-        aria-hidden
-        className="grid h-14 w-14 place-items-center rounded-2xl bg-cream-200 text-2xl"
-      >
-        {meta.emoji}
-      </span>
-      <div className="w-full min-w-0">
-        <p className="truncate text-sm font-extrabold text-ink-900">{chore.title}</p>
-        {chore.isExtra && (
-          <span className="mt-1 inline-block rounded-pill bg-xp-300/40 px-2 py-0.5 text-xs font-extrabold text-ink-900">
-            งานพิเศษ
-          </span>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center justify-center gap-1.5">
-        <XpBadge value={chore.xpValue} size="sm" />
-        {chore.dueTime && (
-          <span className="text-xs font-bold text-ink-500">⏰ {chore.dueTime}</span>
-        )}
-      </div>
-      <Button
-        variant="primary"
-        size="sm"
-        className="w-full"
-        onClick={onDone}
-        disabled={disabled}
-        leftIcon={<span aria-hidden>{busy ? '⏳' : '✅'}</span>}
-      >
-        {busy ? 'กำลังส่ง…' : chore.requirePhoto ? 'แนบรูป' : 'ทำเสร็จแล้ว'}
       </Button>
     </Card>
   )

@@ -254,7 +254,7 @@ export function ChildRewards({ childId }: { childId: string }) {
             <ViewModeToggle mode={requestsMode} onChange={setRequestsMode} />
           </div>
           {requestsMode === 'grid' ? (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div role="list" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {requests.map((r) => (
                 <div key={r.id} role="listitem">
                   <Card padding="sm" className="flex flex-col items-center gap-2 p-3 text-center">
@@ -352,6 +352,11 @@ function RewardTile({
       </span>
       <div className="w-full min-w-0">
         <h3 className="truncate text-sm font-extrabold text-ink-900">{reward.title}</h3>
+        {reward.description && (
+          <p className="mt-0.5 line-clamp-2 text-xs font-semibold text-ink-600">
+            {reward.description}
+          </p>
+        )}
         <XpBadge value={reward.xpCost} size="sm" className="mt-1" />
       </div>
       {shortfall != null && (

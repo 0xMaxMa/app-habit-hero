@@ -122,6 +122,17 @@ export function DeductionRow({
             >
               {d.reason}
             </p>
+            {!cancelled && d.applied < d.amount && (
+              <p className="mt-1 text-xs font-bold text-ink-500">
+                คะแนนไม่พอ หักได้จริง {d.applied.toLocaleString()} XP (ไม่ติดลบ)
+              </p>
+            )}
+            {cancelled && (
+              <p className="mt-1 text-xs font-bold text-ink-500">
+                คืน {d.applied.toLocaleString()} XP แล้ว
+                {d.cancelledBy ? ` · โดย${d.cancelledBy.name}` : ''}
+              </p>
+            )}
           </div>
           {cancelled ? (
             <span className="rounded-pill bg-cream-300 px-2.5 py-1 text-xs font-black text-ink-600">

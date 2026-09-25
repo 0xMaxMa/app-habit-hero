@@ -36,13 +36,14 @@ import {
   XpBadge,
   type ChoreStatus,
 } from '@/components/ui'
+import { ChoreTile } from '@/components/ChoreTile'
 import { DeductionRow, type Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { downscaleImage } from '@/lib/web/image'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
 import { mergeTimeline, groupByDay, type TimelineEntry as SharedTimelineEntry } from '@/lib/web/timeline'
 import { useViewModePreference } from '@/lib/web/useViewModePreference'
-import { CATEGORY_META, type ChoreCategory } from '@/app/(parent)/chores/types'
+import { type ChoreCategory } from '@/app/(parent)/chores/types'
 
 // ---- API response shapes (the subset this screen reads) -------------------
 
@@ -329,7 +330,7 @@ export function ChildTasks({ childId }: { childId: string }) {
             <ViewModeToggle mode={timelineMode} onChange={setTimelineMode} />
           </div>
           {timelineMode === 'grid' ? (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div role="list" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {doneToday.map((entry) => (
                 <EntryTile key={entryKey(entry)} entry={entry} />
               ))}
@@ -368,7 +369,7 @@ export function ChildTasks({ childId }: { childId: string }) {
               <section key={group.key} className="space-y-3">
                 <h3 className="text-sm font-extrabold text-ink-600">{group.label}</h3>
                 {timelineMode === 'grid' ? (
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  <div role="list" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                     {group.items.map((entry) => (
                       <EntryTile key={entryKey(entry)} entry={entry} />
                     ))}
@@ -449,63 +450,6 @@ function ChoreRow({
         leftIcon={<span aria-hidden>{busy ? '⏳' : '✅'}</span>}
       >
         {busy ? 'กำลังส่ง…' : chore.requirePhoto ? 'แนบรูป แล้วส่งงาน' : 'ทำเสร็จแล้ว'}
-      </Button>
-    </Card>
-  )
-}
-
-/** Grid-view tile for an actionable chore — same data/actions as ChoreRow,
- *  stacked vertically around the category emoji (a chore has no photo of its
- *  own, so its category icon stands in as the thumbnail). */
-function ChoreTile({
-  chore,
-  busy,
-  disabled,
-  onDone,
-}: {
-  chore: TodayChore
-  busy: boolean
-  disabled: boolean
-  onDone: () => void
-}) {
-  const meta = CATEGORY_META[chore.category]
-  return (
-    <Card
-      padding="sm"
-      className={
-        'flex flex-col items-center gap-2 p-3 text-center' +
-        (chore.isExtra ? ' border-xp-500/40 bg-xp-100/40' : '')
-      }
-    >
-      <span
-        aria-hidden
-        className="grid h-14 w-14 place-items-center rounded-2xl bg-cream-200 text-2xl"
-      >
-        {meta.emoji}
-      </span>
-      <div className="w-full min-w-0">
-        <p className="truncate text-sm font-extrabold text-ink-900">{chore.title}</p>
-        {chore.isExtra && (
-          <span className="mt-1 inline-block rounded-pill bg-xp-300/40 px-2 py-0.5 text-xs font-extrabold text-ink-900">
-            งานพิเศษ
-          </span>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center justify-center gap-1.5">
-        <XpBadge value={chore.xpValue} size="sm" />
-        {chore.dueTime && (
-          <span className="text-xs font-bold text-ink-500">⏰ {chore.dueTime}</span>
-        )}
-      </div>
-      <Button
-        variant="primary"
-        size="sm"
-        className="w-full"
-        onClick={onDone}
-        disabled={disabled}
-        leftIcon={<span aria-hidden>{busy ? '⏳' : '✅'}</span>}
-      >
-        {busy ? 'กำลังส่ง…' : chore.requirePhoto ? 'แนบรูป' : 'ทำเสร็จแล้ว'}
       </Button>
     </Card>
   )

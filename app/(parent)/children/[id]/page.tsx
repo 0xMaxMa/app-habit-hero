@@ -439,7 +439,7 @@ export default function ChildProfilePage() {
               <p className="text-sm font-semibold text-ink-500">ยังไม่มีกิจกรรม</p>
             ) : timelineMode === 'grid' ? (
               <>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div role="list" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   {visibleTimeline.map((entry) =>
                     entry.kind === 'deduction' ? (
                       <DeductionTimelineTile key={`d-${entry.deduction.id}`} deduction={entry.deduction} />
@@ -700,6 +700,16 @@ function DeductionTimelineTile({ deduction }: { deduction: Deduction }) {
             {timeLabel(deduction.createdAt)}
             {deduction.by ? ` · โดย${deduction.by.name}` : ''}
           </p>
+          {!cancelled && deduction.applied < deduction.amount && (
+            <p className="mt-0.5 text-xs font-bold text-ink-500">
+              คะแนนไม่พอ หักได้ {deduction.applied.toLocaleString()} XP
+            </p>
+          )}
+          {cancelled && (
+            <p className="mt-0.5 text-xs font-bold text-ink-500">
+              คืน {deduction.applied.toLocaleString()} XP แล้ว
+            </p>
+          )}
         </div>
         {cancelled ? (
           <span className="rounded-pill bg-cream-300 px-2.5 py-1 text-xs font-black text-ink-600">

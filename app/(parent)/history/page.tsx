@@ -419,7 +419,7 @@ export default function HistoryPage() {
                   </span>
                 </h2>
                 {viewMode === 'grid' ? (
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  <div role="list" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                     {group.items.map((entry) =>
                       entry.kind === 'completion' ? (
                         <TimelineTile
