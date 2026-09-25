@@ -34,6 +34,8 @@ import {
   Card,
   PhotoThumb,
   ProgressBar,
+  StatusChip,
+  ViewModeToggle,
   XpBadge,
   cn,
   type ChoreStatus,
@@ -42,6 +44,7 @@ import { DeductPointsCard, type DeductionResult } from '@/components/DeductPoint
 import type { Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
+import { useViewModePreference } from '@/lib/web/useViewModePreference'
 import { levelInfo, rankName } from '@/lib/level'
 import { mergeTimeline } from '@/lib/web/timeline'
 
@@ -145,6 +148,7 @@ export default function ChildProfilePage() {
   const [reloadKey, setReloadKey] = useState(0)
   const background = useRef(false)
   const [timelineShown, setTimelineShown] = useState(TIMELINE_PAGE_SIZE)
+  const [timelineMode, setTimelineMode] = useViewModePreference('child-profile-timeline')
 
   // Switching to a different child's profile (no remount — same route) should
   // not carry over how far the previous child's timeline was expanded.
@@ -425,9 +429,38 @@ export default function ChildProfilePage() {
               whole page (including the point-deduction card below it) behind
               an endless scroll. */}
           <Card>
-            <h3 className="mb-4 text-lg font-black text-ink-900">ไทม์ไลน์กิจกรรม</h3>
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <h3 className="text-lg font-black text-ink-900">ไทม์ไลน์กิจกรรม</h3>
+              {timeline.length > 0 && (
+                <ViewModeToggle mode={timelineMode} onChange={setTimelineMode} />
+              )}
+            </div>
             {timeline.length === 0 ? (
               <p className="text-sm font-semibold text-ink-500">ยังไม่มีกิจกรรม</p>
+            ) : timelineMode === 'grid' ? (
+              <>
+                <div role="list" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {visibleTimeline.map((entry) =>
+                    entry.kind === 'deduction' ? (
+                      <DeductionTimelineTile key={`d-${entry.deduction.id}`} deduction={entry.deduction} />
+                    ) : (
+                      <CompletionTimelineTile key={`c-${entry.completion.id}`} completion={entry.completion} />
+                    ),
+                  )}
+                </div>
+                {hasMoreTimeline && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    fullWidth
+                    className="mt-3"
+                    onClick={() => setTimelineShown((n) => n + TIMELINE_PAGE_SIZE)}
+                  >
+                    โหลดเพิ่มเติม
+                  </Button>
+                )}
+              </>
             ) : (
               <>
                 <ul className="space-y-0">
@@ -603,6 +636,89 @@ function DeductionTimelineBody({ deduction }: { deduction: Deduction }) {
       ) : (
         <XpBadge value={-deduction.applied} tone="penalty" size="sm" />
       )}
+    </div>
+  )
+}
+
+/** Grid-view tile counterpart of CompletionTimelineBody. */
+function CompletionTimelineTile({ completion }: { completion: Completion }) {
+  const st = completionStatus(completion)
+  return (
+    <div role="listitem">
+      <Card padding="sm" className="flex flex-col items-center gap-2 p-3 text-center">
+        {completion.photoUrl ? (
+          <PhotoThumb photoUrl={completion.photoUrl} title={completion.chore.title} size="md" />
+        ) : (
+          <span
+            aria-hidden
+            className="grid h-14 w-14 place-items-center rounded-2xl bg-cream-200 text-2xl"
+          >
+            📋
+          </span>
+        )}
+        <div className="w-full min-w-0">
+          <p className="truncate text-sm font-extrabold text-ink-900">{completion.chore.title}</p>
+          <p className="mt-0.5 truncate text-xs font-semibold text-ink-500">
+            {timeLabel(completion.submittedAt)} · {st.meta}
+          </p>
+        </div>
+        <StatusChip status={st.chip} size="sm" />
+        <span className="text-sm font-black text-xp-600">
+          +{(completion.xpAwarded ?? completion.chore.xpValue).toLocaleString()} XP
+        </span>
+      </Card>
+    </div>
+  )
+}
+
+/** Grid-view tile counterpart of DeductionTimelineBody (read-only, no cancel here). */
+function DeductionTimelineTile({ deduction }: { deduction: Deduction }) {
+  const cancelled = deduction.cancelledAt !== null
+  return (
+    <div role="listitem">
+      <Card
+        padding="sm"
+        className={cn(
+          'flex flex-col items-center gap-2 border-danger-500/30 p-3 text-center',
+          cancelled ? 'bg-cream-100 opacity-70' : 'bg-danger-100/60',
+        )}
+      >
+        <span
+          aria-hidden
+          className="grid h-14 w-14 place-items-center rounded-2xl bg-danger-100 text-2xl text-danger-500"
+        >
+          ➖
+        </span>
+        <div className="w-full min-w-0">
+          <p className={cn('truncate text-sm font-extrabold text-ink-900', cancelled && 'line-through')}>
+            หักคะแนน
+          </p>
+          <p className={cn('mt-0.5 line-clamp-2 text-xs font-semibold text-ink-600', cancelled && 'line-through')}>
+            {deduction.reason}
+          </p>
+          <p className="mt-0.5 truncate text-xs font-semibold text-ink-500">
+            {timeLabel(deduction.createdAt)}
+            {deduction.by ? ` · โดย${deduction.by.name}` : ''}
+          </p>
+          {!cancelled && deduction.applied < deduction.amount && (
+            <p className="mt-0.5 text-xs font-bold text-ink-500">
+              คะแนนไม่พอ หักได้ {deduction.applied.toLocaleString()} XP
+            </p>
+          )}
+          {cancelled && (
+            <p className="mt-0.5 text-xs font-bold text-ink-500">
+              คืน {deduction.applied.toLocaleString()} XP แล้ว
+            </p>
+          )}
+        </div>
+        {cancelled ? (
+          <span className="rounded-pill bg-cream-300 px-2.5 py-1 text-xs font-black text-ink-600">
+            ยกเลิกแล้ว
+          </span>
+        ) : (
+          <XpBadge value={-deduction.applied} tone="penalty" size="sm" />
+        )}
+      </Card>
     </div>
   )
 }
