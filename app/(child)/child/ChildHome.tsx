@@ -30,9 +30,11 @@ import {
 } from '@/components/ui'
 import Link from 'next/link'
 import { BadgeCelebration, type CelebratedBadge } from '@/components/BadgeCelebration'
+import { DeductionRow, type Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { downscaleImage } from '@/lib/web/image'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
+import { mergeTimeline, type TimelineEntry as SharedTimelineEntry } from '@/lib/web/timeline'
 import { useViewModePreference } from '@/lib/web/useViewModePreference'
 import { levelInfo } from '@/lib/level'
 import { CATEGORY_META, type ChoreCategory } from '@/app/(parent)/chores/types'
@@ -95,6 +97,12 @@ interface Completion {
 interface CompletionsResponse {
   completions: Completion[]
 }
+interface DeductionsResponse {
+  deductions: Deduction[]
+}
+
+/** One axis for both record kinds, so a deduction sits in the right spot. */
+type TimelineEntry = SharedTimelineEntry<Completion, Deduction>
 
 type Toast = { kind: 'success' | 'error'; text: string } | null
 
@@ -145,6 +153,7 @@ export function ChildHome({
   const [progress, setProgress] = useState<ProgressResponse | null>(null)
   const [chores, setChores] = useState<TodayChore[] | null>(null)
   const [completions, setCompletions] = useState<Completion[] | null>(null)
+  const [deductions, setDeductions] = useState<Deduction[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<Toast>(null)
   // Freshly-earned badges to celebrate with a popup (cleared once seen).
@@ -161,29 +170,43 @@ export function ChildHome({
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false
+    const corePromise = Promise.all([
+      api.get<ProgressResponse>(
+        `/api/progress?user=${encodeURIComponent(childId)}`,
+      ),
+      api.get<TodayResponse>(
+        `/api/chores/today?child=${encodeURIComponent(childId)}`,
+      ),
+      api.get<CompletionsResponse>(
+        `/api/completions?child=${encodeURIComponent(childId)}`,
+      ),
+    ])
+    // No ?child= — the endpoint pins a child caller to their own rows. Fetched
+    // alongside the core data but resolved independently, so a failed
+    // deductions fetch never blocks/errors the rest of the home screen.
+    const dedsPromise = api.get<DeductionsResponse>('/api/deductions')
+
     try {
-      const [prog, today, comps] = await Promise.all([
-        api.get<ProgressResponse>(
-          `/api/progress?user=${encodeURIComponent(childId)}`,
-        ),
-        api.get<TodayResponse>(
-          `/api/chores/today?child=${encodeURIComponent(childId)}`,
-        ),
-        api.get<CompletionsResponse>(
-          `/api/completions?child=${encodeURIComponent(childId)}`,
-        ),
-      ])
+      const [prog, today, comps] = await corePromise
       setProgress(prog)
       setChores(today.chores)
       setCompletions(comps.completions)
       setError(null)
     } catch (err) {
-      if (silent) return // background refresh — keep the last good view
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้งนะ',
-      )
+      if (!silent) {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้งนะ',
+        )
+      }
+    }
+
+    try {
+      const deds = await dedsPromise
+      setDeductions(deds.deductions)
+    } catch {
+      // Non-critical — a failed deductions fetch just means none show this load.
     }
   }, [childId])
 
@@ -309,8 +332,11 @@ export function ChildHome({
   const weekXp = (completions ?? [])
     .filter((c) => c.status === 'approved' && startOfDay(new Date(c.submittedAt)) >= mondayStart)
     .reduce((sum, c) => sum + (c.xpAwarded ?? 0), 0)
-  const timeline = [...(completions ?? [])].sort(
-    (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime(),
+  const timeline = mergeTimeline(
+    completions ?? [],
+    deductions ?? [],
+    (c) => new Date(c.submittedAt).getTime(),
+    (d) => new Date(d.createdAt).getTime(),
   )
 
   return (
@@ -527,88 +553,120 @@ export function ChildHome({
             </Card>
           ) : timelineMode === 'grid' ? (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {timeline.slice(0, 15).map((c) => (
-                <div key={c.id} role="listitem">
-                  <Card padding="sm" className="flex flex-col items-center gap-2 p-3 text-center">
-                    {c.photoUrl ? (
-                      <PhotoThumb photoUrl={c.photoUrl} title={c.chore.title} size="md" />
-                    ) : (
-                      <span
-                        aria-hidden
-                        className={
-                          'grid h-14 w-14 place-items-center rounded-pill text-xl font-black ' +
-                          (c.status === 'approved'
-                            ? 'bg-success-100 text-success-500'
-                            : c.status === 'rejected'
-                              ? 'bg-danger-100 text-danger-500'
-                              : 'bg-cream-300 text-ink-500')
-                        }
-                      >
-                        {c.status === 'approved' ? '✓' : c.status === 'rejected' ? '✕' : '⏳'}
+              {timeline.slice(0, 15).map((entry) =>
+                entry.kind === 'deduction' ? (
+                  // kidVoice: reads as something that happened TO them, which is
+                  // what it was. No onCancel — a kid must never see that action.
+                  <DeductionRow
+                    key={`d-${entry.deduction.id}`}
+                    deduction={entry.deduction}
+                    kidVoice
+                    layout="grid"
+                  />
+                ) : (
+                  <div key={entry.completion.id} role="listitem">
+                    <Card padding="sm" className="flex flex-col items-center gap-2 p-3 text-center">
+                      {entry.completion.photoUrl ? (
+                        <PhotoThumb
+                          photoUrl={entry.completion.photoUrl}
+                          title={entry.completion.chore.title}
+                          size="md"
+                        />
+                      ) : (
+                        <span
+                          aria-hidden
+                          className={
+                            'grid h-14 w-14 place-items-center rounded-pill text-xl font-black ' +
+                            (entry.completion.status === 'approved'
+                              ? 'bg-success-100 text-success-500'
+                              : entry.completion.status === 'rejected'
+                                ? 'bg-danger-100 text-danger-500'
+                                : 'bg-cream-300 text-ink-500')
+                          }
+                        >
+                          {entry.completion.status === 'approved'
+                            ? '✓'
+                            : entry.completion.status === 'rejected'
+                              ? '✕'
+                              : '⏳'}
+                        </span>
+                      )}
+                      <div className="w-full min-w-0">
+                        <p className="truncate text-sm font-extrabold text-ink-900">
+                          {entry.completion.chore.title}
+                        </p>
+                        <p className="mt-0.5 truncate text-xs font-semibold text-ink-500">
+                          {timeLabel(entry.completion.submittedAt)} · {statusMeta(entry.completion.status)}
+                        </p>
+                      </div>
+                      <span className="text-sm font-black text-xp-600">
+                        +{(entry.completion.xpAwarded ?? entry.completion.chore.xpValue).toLocaleString()} XP
                       </span>
-                    )}
-                    <div className="w-full min-w-0">
-                      <p className="truncate text-sm font-extrabold text-ink-900">
-                        {c.chore.title}
-                      </p>
-                      <p className="mt-0.5 truncate text-xs font-semibold text-ink-500">
-                        {timeLabel(c.submittedAt)} · {statusMeta(c.status)}
-                      </p>
-                    </div>
-                    <span className="text-sm font-black text-xp-600">
-                      +{(c.xpAwarded ?? c.chore.xpValue).toLocaleString()} XP
-                    </span>
-                  </Card>
-                </div>
-              ))}
+                    </Card>
+                  </div>
+                ),
+              )}
             </div>
           ) : (
             <Card>
               <ul className="space-y-0">
-                {timeline.slice(0, 15).map((c, i, arr) => (
-                  <li key={c.id} className="flex gap-3.5 pb-4 last:pb-0">
-                    <div className="flex flex-col items-center gap-1">
-                      <span
-                        className={
-                          'grid h-7 w-7 shrink-0 place-items-center rounded-pill text-xs font-black ' +
-                          (c.status === 'approved'
-                            ? 'bg-success-100 text-success-500'
-                            : c.status === 'rejected'
-                              ? 'bg-danger-100 text-danger-500'
-                              : 'bg-cream-300 text-ink-500')
-                        }
-                      >
-                        {c.status === 'approved' ? '✓' : c.status === 'rejected' ? '✕' : '⏳'}
-                      </span>
-                      {i < arr.length - 1 && <span className="w-0.5 flex-1 bg-cream-500" />}
-                    </div>
-                    <div className="flex flex-1 items-center gap-3 rounded-2xl border-[1.5px] border-cream-400 bg-cream-100 px-3.5 py-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-extrabold text-ink-900">
-                          {c.chore.title}
-                        </p>
-                        <p className="mt-0.5 text-xs font-semibold text-ink-500">
-                          {timeLabel(c.submittedAt)} · {statusMeta(c.status)}
-                        </p>
+                {timeline.slice(0, 15).map((entry, i, arr) =>
+                  entry.kind === 'deduction' ? (
+                    <DeductionRow
+                      key={`d-${entry.deduction.id}`}
+                      deduction={entry.deduction}
+                      kidVoice
+                    />
+                  ) : (
+                    <li key={entry.completion.id} className="flex gap-3.5 pb-4 last:pb-0">
+                      <div className="flex flex-col items-center gap-1">
+                        <span
+                          className={
+                            'grid h-7 w-7 shrink-0 place-items-center rounded-pill text-xs font-black ' +
+                            (entry.completion.status === 'approved'
+                              ? 'bg-success-100 text-success-500'
+                              : entry.completion.status === 'rejected'
+                                ? 'bg-danger-100 text-danger-500'
+                                : 'bg-cream-300 text-ink-500')
+                          }
+                        >
+                          {entry.completion.status === 'approved'
+                            ? '✓'
+                            : entry.completion.status === 'rejected'
+                              ? '✕'
+                              : '⏳'}
+                        </span>
+                        {i < arr.length - 1 && <span className="w-0.5 flex-1 bg-cream-500" />}
                       </div>
-                      <span className="whitespace-nowrap text-sm font-black text-xp-600">
-                        +{(c.xpAwarded ?? c.chore.xpValue).toLocaleString()} XP
-                      </span>
-                      {c.photoUrl && (
-                        <PhotoThumb
-                          photoUrl={c.photoUrl}
-                          title={c.chore.title}
-                          size="sm"
-                        />
-                      )}
-                    </div>
-                  </li>
-                ))}
+                      <div className="flex flex-1 items-center gap-3 rounded-2xl border-[1.5px] border-cream-400 bg-cream-100 px-3.5 py-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-extrabold text-ink-900">
+                            {entry.completion.chore.title}
+                          </p>
+                          <p className="mt-0.5 text-xs font-semibold text-ink-500">
+                            {timeLabel(entry.completion.submittedAt)} · {statusMeta(entry.completion.status)}
+                          </p>
+                        </div>
+                        <span className="whitespace-nowrap text-sm font-black text-xp-600">
+                          +{(entry.completion.xpAwarded ?? entry.completion.chore.xpValue).toLocaleString()} XP
+                        </span>
+                        {entry.completion.photoUrl && (
+                          <PhotoThumb
+                            photoUrl={entry.completion.photoUrl}
+                            title={entry.completion.chore.title}
+                            size="sm"
+                          />
+                        )}
+                      </div>
+                    </li>
+                  ),
+                )}
               </ul>
             </Card>
           )}
         </section>
       )}
+
 
       {/* ---- Toast ------------------------------------------------------ */}
       {toast && (

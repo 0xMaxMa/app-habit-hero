@@ -3,11 +3,14 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
 /**
  * tests/e2e/deduction.spec.ts — web E2E for parent point deduction.
  *
- * Proves the three surfaces the feature spans actually work in a browser, not
+ * Proves the surfaces the feature spans actually work in a browser, not
  * just the API (that is covered by tests/integration/deductions.test.ts):
  *   - components/DeductPointsCard.tsx on app/(parent)/children/[id]/page.tsx
  *     → the form, the confirm dialog, the toast, and the timeline row
  *   - app/(parent)/history/page.tsx  → the entry in the family timeline
+ *   - app/(child)/child/ChildHome.tsx → the CHILD sees it on their default
+ *     home page, with the reason (this is the very first screen the PIN
+ *     login flow lands on)
  *   - app/(child)/child/tasks/ChildTasks.tsx → the CHILD sees it, with the reason
  *
  * Also covers undoing that same deduction (POST /api/deductions/:id/cancel,
@@ -157,6 +160,16 @@ test.describe.serial('Parent point deduction', () => {
       await page.getByRole('button', { name: digit, exact: true }).click()
     }
     await page.waitForURL('**/child')
+
+    // The PIN flow always lands here first (app/(child)/child/ChildHome.tsx,
+    // its "ไทม์ไลน์กิจกรรม" section) — the deduction has to show up on THIS
+    // screen too, not only on งานของฉัน below.
+    const homeRow = page.getByRole('listitem').filter({ hasText: REASON }).first()
+    await expect(homeRow).toBeVisible()
+    await expect(homeRow).toContainText('หักคะแนน')
+    await expect(homeRow).toContainText(String(AMOUNT))
+    // A kid must never be offered the cancel action, here either.
+    await expect(homeRow.getByRole('button', { name: 'ยกเลิก' })).toHaveCount(0)
 
     await page.goto('/child/tasks')
     await expect(page.getByRole('heading', { name: 'งานของฉัน' })).toBeVisible()
