@@ -27,12 +27,23 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Card, PhotoThumb, StatusChip, XpBadge, type ChoreStatus } from '@/components/ui'
+import {
+  Button,
+  Card,
+  PhotoThumb,
+  StatusChip,
+  ViewModeToggle,
+  XpBadge,
+  type ChoreStatus,
+} from '@/components/ui'
+import { ChoreTile } from '@/components/ChoreTile'
 import { DeductionRow, type Deduction } from '@/components/DeductionRow'
 import { api, ApiError } from '@/lib/web/api'
 import { downscaleImage } from '@/lib/web/image'
 import { useAutoRefresh } from '@/lib/web/useAutoRefresh'
 import { mergeTimeline, groupByDay, type TimelineEntry as SharedTimelineEntry } from '@/lib/web/timeline'
+import { useViewModePreference } from '@/lib/web/useViewModePreference'
+import { type ChoreCategory } from '@/app/(parent)/chores/types'
 
 // ---- API response shapes (the subset this screen reads) -------------------
 
@@ -42,6 +53,7 @@ interface TodayChore {
   description: string | null
   xpValue: number
   requirePhoto: boolean
+  category: ChoreCategory
   isExtra: boolean
   dueTime: string | null
 }
@@ -100,6 +112,8 @@ export function ChildTasks({ childId }: { childId: string }) {
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<Toast>(null)
   const [submitting, setSubmitting] = useState<string | null>(null)
+  const [todayMode, setTodayMode] = useViewModePreference('child-tasks-today')
+  const [timelineMode, setTimelineMode] = useViewModePreference('child-tasks-timeline')
 
   // A hidden file input reused for every "needs a photo" chore.
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -254,13 +268,16 @@ export function ChildTasks({ childId }: { childId: string }) {
 
       {/* ---- 1) Today's still-pending chores (actionable) --------------- */}
       <section aria-label="งานวันนี้ที่ยังไม่ได้ทำ" className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h2 className="text-lg font-extrabold text-ink-900">งานวันนี้ที่ยังไม่ได้ทำ</h2>
-          {chores && chores.length > 0 && (
-            <span className="rounded-pill bg-primary-300/30 px-3 py-1 text-sm font-extrabold text-primary-700">
-              เหลือ {chores.length} งาน
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {chores && chores.length > 0 && (
+              <span className="rounded-pill bg-primary-300/30 px-3 py-1 text-sm font-extrabold text-primary-700">
+                เหลือ {chores.length} งาน
+              </span>
+            )}
+            <ViewModeToggle mode={todayMode} onChange={setTodayMode} />
+          </div>
         </div>
 
         {chores === null && !error ? (
@@ -276,6 +293,18 @@ export function ChildTasks({ childId }: { childId: string }) {
               พักผ่อนได้เลย แล้วพรุ่งนี้มาลุยต่อ 💪
             </p>
           </Card>
+        ) : todayMode === 'grid' ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {sortedChores?.map((chore) => (
+              <ChoreTile
+                key={chore.id}
+                chore={chore}
+                busy={submitting === chore.id}
+                disabled={submitting !== null}
+                onDone={() => onDone(chore)}
+              />
+            ))}
+          </div>
         ) : (
           <div className="space-y-3">
             {sortedChores?.map((chore) => (
@@ -294,20 +323,36 @@ export function ChildTasks({ childId }: { childId: string }) {
       {/* ---- 2) Today's record (done + any point deductions) ------------- */}
       {doneToday.length > 0 && (
         <section aria-label="วันนี้" className="space-y-3">
-          <h2 className="text-lg font-extrabold text-ink-900">
-            {doneToday.some((e) => e.kind === 'deduction') ? 'วันนี้' : 'ทำแล้ววันนี้'}
-          </h2>
-          <ol className="space-y-3">
-            {doneToday.map((entry) => (
-              <EntryRow key={entryKey(entry)} entry={entry} />
-            ))}
-          </ol>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-lg font-extrabold text-ink-900">
+              {doneToday.some((e) => e.kind === 'deduction') ? 'วันนี้' : 'ทำแล้ววันนี้'}
+            </h2>
+            <ViewModeToggle mode={timelineMode} onChange={setTimelineMode} />
+          </div>
+          {timelineMode === 'grid' ? (
+            <div role="list" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {doneToday.map((entry) => (
+                <EntryTile key={entryKey(entry)} entry={entry} />
+              ))}
+            </div>
+          ) : (
+            <ol className="space-y-3">
+              {doneToday.map((entry) => (
+                <EntryRow key={entryKey(entry)} entry={entry} />
+              ))}
+            </ol>
+          )}
         </section>
       )}
 
       {/* ---- 3) Full history (older than today) ------------------------ */}
       <section aria-label="ประวัติทั้งหมด" className="space-y-3">
-        <h2 className="text-lg font-extrabold text-ink-900">ประวัติทั้งหมด</h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-lg font-extrabold text-ink-900">ประวัติทั้งหมด</h2>
+          {doneToday.length === 0 && (
+            <ViewModeToggle mode={timelineMode} onChange={setTimelineMode} />
+          )}
+        </div>
         {(completions === null || deductions === null) && !error ? (
           <TimelineSkeleton />
         ) : historyGroups.length === 0 ? (
@@ -323,11 +368,19 @@ export function ChildTasks({ childId }: { childId: string }) {
             {historyGroups.map((group) => (
               <section key={group.key} className="space-y-3">
                 <h3 className="text-sm font-extrabold text-ink-600">{group.label}</h3>
-                <ol className="space-y-3">
-                  {group.items.map((entry) => (
-                    <EntryRow key={entryKey(entry)} entry={entry} />
-                  ))}
-                </ol>
+                {timelineMode === 'grid' ? (
+                  <div role="list" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {group.items.map((entry) => (
+                      <EntryTile key={entryKey(entry)} entry={entry} />
+                    ))}
+                  </div>
+                ) : (
+                  <ol className="space-y-3">
+                    {group.items.map((entry) => (
+                      <EntryRow key={entryKey(entry)} entry={entry} />
+                    ))}
+                  </ol>
+                )}
               </section>
             ))}
           </div>
@@ -419,6 +472,14 @@ function EntryRow({ entry }: { entry: TimelineEntry }) {
   return <TimelineRow entry={entry.completion} />
 }
 
+/** Grid-view counterpart of EntryRow. */
+function EntryTile({ entry }: { entry: TimelineEntry }) {
+  if (entry.kind === 'deduction') {
+    return <DeductionRow deduction={entry.deduction} kidVoice layout="grid" />
+  }
+  return <TimelineTile entry={entry.completion} />
+}
+
 // ---- One completion row (mirrors the old history timeline) ----------------
 
 function TimelineRow({ entry }: { entry: Completion }) {
@@ -457,6 +518,40 @@ function TimelineRow({ entry }: { entry: Completion }) {
         </div>
       </Card>
     </li>
+  )
+}
+
+/** Grid-view tile for a completion — same fields as TimelineRow, thumbnail on top. */
+function TimelineTile({ entry }: { entry: Completion }) {
+  const xp =
+    entry.status === 'approved' && entry.xpAwarded != null ? entry.xpAwarded : entry.chore.xpValue
+
+  return (
+    <div role="listitem">
+      <Card padding="sm" className="flex flex-col items-center gap-2 p-3 text-center">
+        <PhotoThumb photoUrl={entry.photoUrl} title={entry.chore.title} size="md" />
+        <div className="w-full min-w-0">
+          <h4 className="truncate text-sm font-extrabold text-ink-900">{entry.chore.title}</h4>
+          <p className="mt-0.5 truncate text-xs font-semibold text-ink-600">
+            {formatTime(entry.submittedAt)} · {STATUS_LABEL[entry.status]}
+          </p>
+        </div>
+        <StatusChip status={STATUS_CHIP[entry.status]} size="sm" />
+        <div className="flex flex-wrap items-center justify-center gap-1.5">
+          <XpBadge value={xp} size="sm" />
+          {entry.status === 'approved' && (
+            <span className="rounded-pill bg-success-100 px-2 py-0.5 text-xs font-bold text-success-500">
+              +{xp} XP
+            </span>
+          )}
+        </div>
+        {entry.feedback && (
+          <p className="line-clamp-2 rounded-xl bg-cream-200 px-2 py-1.5 text-xs text-ink-700">
+            {entry.feedback}
+          </p>
+        )}
+      </Card>
+    </div>
   )
 }
 
