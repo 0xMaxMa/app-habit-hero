@@ -262,6 +262,23 @@ describe('POST /api/redemptions — a parent redeems on behalf of a child (on-be
     expect(env.data.redemption.redeemedBy).toBe(childAId)
     expect(await totalXpOf(childAId)).toBe(before)
   })
+
+  it('a child naming themselves by their OWN channelUserRef (not internal id) still succeeds', async () => {
+    const { childARef, childAId } = await getRefs()
+    const before = await totalXpOf(childAId)
+
+    const req = new Request('http://t/api/redemptions', {
+      method: 'POST',
+      headers: agentHeaders(childARef),
+      body: JSON.stringify({ rewardId: IDS.rewardSnack, user: childARef }),
+    })
+    const res = await REDEEM(req)
+    const env = await res.json()
+
+    expect(res.status).toBe(201)
+    expect(env.data.redemption.redeemedBy).toBe(childAId)
+    expect(await totalXpOf(childAId)).toBe(before)
+  })
 })
 
 describe('POST /api/redemptions/:id/approve — parent approves (T22)', () => {

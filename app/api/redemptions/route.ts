@@ -155,7 +155,16 @@ async function resolveRedemptionTarget(
 ): Promise<Actor> {
   if (actor.role === 'child') {
     if (requestedUser && requestedUser !== actor.userId) {
-      throw forbidden('เด็กแลกรางวัลได้เฉพาะของตัวเองเท่านั้น')
+      // `requestedUser` may be the child's OWN channelUserRef rather than their
+      // internal id (same "id or ref" contract the parent branch below honors)
+      // — resolve it before rejecting, or a self-redemption sent by ref would
+      // be wrongly treated as "redeeming as a sibling".
+      const named =
+        (await prisma.user.findUnique({ where: { id: requestedUser } })) ??
+        (await prisma.user.findUnique({ where: { channelUserRef: requestedUser } }))
+      if (!named || named.id !== actor.userId) {
+        throw forbidden('เด็กแลกรางวัลได้เฉพาะของตัวเองเท่านั้น')
+      }
     }
     return actor
   }
@@ -180,9 +189,14 @@ async function resolveRedemptionTarget(
 export const POST = withHandler(async (req) => {
   const actor = await resolveActor(req)
   const body = await parseBody(req, createSchema)
-  const target = await resolveRedemptionTarget(actor, body.user)
-
-  const reward = await prisma.reward.findUnique({ where: { id: body.rewardId } })
+  // Independent lookups (target resolution touches only `user`, this touches
+  // only `reward`) — run them concurrently rather than paying two sequential
+  // round trips, especially since resolving a parent-named target already
+  // costs up to two of its own.
+  const [target, reward] = await Promise.all([
+    resolveRedemptionTarget(actor, body.user),
+    prisma.reward.findUnique({ where: { id: body.rewardId } }),
+  ])
   // Not-found and cross-family both read as "no such reward" to this caller.
   if (!reward || reward.familyId !== actor.familyId || !reward.isActive) {
     throw notFound('Reward not found')
