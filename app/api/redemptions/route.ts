@@ -1,12 +1,22 @@
 /**
  * app/api/redemptions/route.ts — reward redemptions (T22, T17).
  *
- *   POST /api/redemptions  — a child asks to redeem a reward. We check the
+ *   POST /api/redemptions  — redeem a reward for a child. We check that
  *       child's available XP (UserProgress.totalXp) against the reward cost:
  *         • enough  → create a pending RewardRedemption and return it.
  *         • short   → return { enough: false, shortfall } (200) WITHOUT creating
  *                     a row and WITHOUT deducting any XP.
  *       XP is only deducted later, when a parent approves (see ./[id]/approve).
+ *
+ *       Who the redemption is FOR is resolved by resolveRedemptionTarget, not
+ *       just "whoever is calling": a child always redeems for themselves, but a
+ *       parent has no XP balance of their own (parents never earn XP) — they
+ *       must name the child via `user`, the same param GET /api/progress and
+ *       POST /api/deductions already use for "act on this family member".
+ *       Checking `actor.userId`'s balance unconditionally used to mean a
+ *       parent-initiated redemption (e.g. via the gateway agent, on behalf of a
+ *       child with no channel identity of their own) silently read the
+ *       parent's own — nonexistent — balance and reported a false "0 XP".
  *
  *   GET /api/redemptions?status=pending
  *       • parent → family-scoped list of every member's requests (review queue).
@@ -27,6 +37,10 @@ import {
   parseQuery,
   conflict,
   notFound,
+  badRequest,
+  forbidden,
+  assertFamily,
+  type Actor,
 } from '@/lib/api'
 
 const listQuerySchema = z.object({
@@ -115,13 +129,74 @@ function nextPeriodStart(since: Date, unit: PeriodUnit): Date {
 
 const createSchema = z.object({
   rewardId: z.string().min(1, 'rewardId is required'),
+  // Which child this redemption is for — an internal id OR a channelUserRef,
+  // same resolution as POST /api/deductions. Optional for a child redeeming
+  // for themselves; REQUIRED for a parent (see resolveRedemptionTarget).
+  user: z.string().min(1).optional(),
 })
+
+/**
+ * Who this redemption is actually for — NOT just "whoever is calling".
+ *
+ * A child always redeems for themselves: `user` is ignored unless it names
+ * someone else, which is forbidden (same rule as GET /api/progress — a child
+ * only ever reads/spends their own balance).
+ *
+ * A parent never accumulates XP, so there is no such thing as "the parent's
+ * balance" to redeem against. `user` is therefore REQUIRED when the actor is a
+ * parent, and must resolve to one of their own children (assertFamily) —
+ * without it there is no way to know which child the reward is for, and
+ * silently falling back to the parent's own (nonexistent) UserProgress row is
+ * exactly the bug this guards against (a false "0 XP available").
+ */
+async function resolveRedemptionTarget(
+  actor: Actor,
+  requestedUser: string | undefined,
+): Promise<Actor> {
+  if (actor.role === 'child') {
+    if (requestedUser && requestedUser !== actor.userId) {
+      // `requestedUser` may be the child's OWN channelUserRef rather than their
+      // internal id (same "id or ref" contract the parent branch below honors)
+      // — resolve it before rejecting, or a self-redemption sent by ref would
+      // be wrongly treated as "redeeming as a sibling".
+      const named =
+        (await prisma.user.findUnique({ where: { id: requestedUser } })) ??
+        (await prisma.user.findUnique({ where: { channelUserRef: requestedUser } }))
+      if (!named || named.id !== actor.userId) {
+        throw forbidden('เด็กแลกรางวัลได้เฉพาะของตัวเองเท่านั้น')
+      }
+    }
+    return actor
+  }
+
+  if (!requestedUser) {
+    throw badRequest('กรุณาระบุว่าจะแลกรางวัลให้เด็กคนไหน (ส่ง user)')
+  }
+
+  const child =
+    (await prisma.user.findUnique({ where: { id: requestedUser } })) ??
+    (await prisma.user.findUnique({ where: { channelUserRef: requestedUser } }))
+  if (!child) {
+    throw notFound('ไม่พบสมาชิกคนนี้')
+  }
+  assertFamily(actor, child.familyId)
+  if (child.role !== 'child') {
+    throw badRequest('แลกรางวัลได้เฉพาะบัญชีเด็กเท่านั้น')
+  }
+  return { userId: child.id, role: child.role, familyId: child.familyId }
+}
 
 export const POST = withHandler(async (req) => {
   const actor = await resolveActor(req)
   const body = await parseBody(req, createSchema)
-
-  const reward = await prisma.reward.findUnique({ where: { id: body.rewardId } })
+  // Independent lookups (target resolution touches only `user`, this touches
+  // only `reward`) — run them concurrently rather than paying two sequential
+  // round trips, especially since resolving a parent-named target already
+  // costs up to two of its own.
+  const [target, reward] = await Promise.all([
+    resolveRedemptionTarget(actor, body.user),
+    prisma.reward.findUnique({ where: { id: body.rewardId } }),
+  ])
   // Not-found and cross-family both read as "no such reward" to this caller.
   if (!reward || reward.familyId !== actor.familyId || !reward.isActive) {
     throw notFound('Reward not found')
@@ -132,7 +207,7 @@ export const POST = withHandler(async (req) => {
   // form, and printed on the reward card as "2/วัน" — but nothing ever counted
   // against them, so "เล่นเกม 1 ชม. · 2/วัน" could be taken ten times in an
   // afternoon. The card was making a promise the API did not keep.
-  const exceeded = await firstExceededLimit(reward, actor.userId, systemClock.now())
+  const exceeded = await firstExceededLimit(reward, target.userId, systemClock.now())
   if (exceeded) {
     throw conflict(`แลกรางวัลนี้ครบโควตา${exceeded.label}แล้ว`, {
       // NOT `code` — that field is the ApiErrorCode envelope (CONFLICT).
@@ -144,9 +219,11 @@ export const POST = withHandler(async (req) => {
     })
   }
 
-  // Available XP is the redeemer's current balance (UserProgress.totalXp).
+  // Available XP is the TARGET child's current balance (UserProgress.totalXp)
+  // — not the calling actor's, which matters exactly when a parent redeems on
+  // a child's behalf.
   const progress = await prisma.userProgress.findUnique({
-    where: { userId: actor.userId },
+    where: { userId: target.userId },
   })
   const available = progress?.totalXp ?? 0
 
@@ -164,7 +241,7 @@ export const POST = withHandler(async (req) => {
   const redemption = await prisma.rewardRedemption.create({
     data: {
       rewardId: reward.id,
-      redeemedBy: actor.userId,
+      redeemedBy: target.userId,
       xpSpent: reward.xpCost,
       status: 'pending',
     },
