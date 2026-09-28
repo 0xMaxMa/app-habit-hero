@@ -33,6 +33,35 @@ async function totalXpOf(userId: string): Promise<number> {
   return p?.totalXp ?? 0
 }
 
+/**
+ * A second family with its own parent + child (150 XP), to prove cross-family
+ * refusal — mirrors tests/integration/deductions.test.ts seedFamilyB.
+ */
+async function seedFamilyB() {
+  const family = await prisma.family.create({ data: { name: 'ครอบครัวบี' } })
+  const parent = await prisma.user.create({
+    data: {
+      name: 'พ่อบี',
+      role: 'parent',
+      familyId: family.id,
+      email: 'parentb-redeem@test.local',
+      channelUserRef: 'gw:parent-b-redeem',
+    },
+  })
+  const child = await prisma.user.create({
+    data: {
+      name: 'น้องบีบี',
+      role: 'child',
+      familyId: family.id,
+      channelUserRef: 'gw:child-bb-redeem',
+    },
+  })
+  await prisma.userProgress.create({
+    data: { userId: child.id, totalXp: 150, currentLevel: 1 },
+  })
+  return { familyId: family.id, parentRef: parent.channelUserRef!, childId: child.id }
+}
+
 describe('POST /api/redemptions — child requests a reward (A-TOOL-4)', () => {
   it('enough XP: creates a pending redemption WITHOUT deducting XP yet', async () => {
     const { childARef, childAId } = await getRefs()
@@ -94,6 +123,143 @@ describe('POST /api/redemptions — child requests a reward (A-TOOL-4)', () => {
     expect(rows).toHaveLength(0)
 
     // XP untouched.
+    expect(await totalXpOf(childAId)).toBe(before)
+  })
+})
+
+describe('POST /api/redemptions — a parent redeems on behalf of a child (on-behalf-of fix)', () => {
+  it('parent-specified child: checks THAT CHILD balance, not the parent (who has none)', async () => {
+    const { parentRef, childAId } = await getRefs()
+    const before = await totalXpOf(childAId) // 150
+
+    const req = new Request('http://t/api/redemptions', {
+      method: 'POST',
+      headers: agentHeaders(parentRef),
+      body: JSON.stringify({ rewardId: IDS.rewardSnack, user: childAId }), // 50 XP
+    })
+    const res = await REDEEM(req)
+    const env = await res.json()
+
+    expect(res.status).toBe(201)
+    expect(env.ok).toBe(true)
+    expect(env.data.enough).toBe(true)
+    expect(env.data.redemption.status).toBe('pending')
+    expect(env.data.redemption.redeemedBy).toBe(childAId)
+
+    const rows = await prisma.rewardRedemption.findMany({ where: { redeemedBy: childAId } })
+    expect(rows).toHaveLength(1)
+    // XP is deducted on approval, not on request — unchanged for the on-behalf-of path too.
+    expect(await totalXpOf(childAId)).toBe(before)
+  })
+
+  it('also accepts the target child by channelUserRef (same resolution as POST /api/deductions)', async () => {
+    const { parentRef, childARef, childAId } = await getRefs()
+
+    const req = new Request('http://t/api/redemptions', {
+      method: 'POST',
+      headers: agentHeaders(parentRef),
+      body: JSON.stringify({ rewardId: IDS.rewardSnack, user: childARef }),
+    })
+    const res = await REDEEM(req)
+    const env = await res.json()
+
+    expect(res.status).toBe(201)
+    expect(env.data.redemption.redeemedBy).toBe(childAId)
+  })
+
+  it('target child genuinely short on XP: shortfall is computed against the CHILD balance, not a false 0', async () => {
+    const { parentRef, childAId } = await getRefs()
+    const before = await totalXpOf(childAId) // 150
+
+    const req = new Request('http://t/api/redemptions', {
+      method: 'POST',
+      headers: agentHeaders(parentRef),
+      body: JSON.stringify({ rewardId: IDS.rewardJapan, user: childAId }), // 50000 XP
+    })
+    const res = await REDEEM(req)
+    const env = await res.json()
+
+    expect(env.ok).toBe(true)
+    expect(env.data.enough).toBe(false)
+    // This is the regression this PR fixes: `available` must be the child's
+    // real 150, never a false 0 read from the (nonexistent) parent balance.
+    expect(env.data.available).toBe(before)
+    expect(env.data.shortfall).toBe(50000 - before)
+
+    expect(await prisma.rewardRedemption.count()).toBe(0)
+    expect(await totalXpOf(childAId)).toBe(before)
+  })
+
+  it('parent omitting the target child: 400 (ambiguous), rather than silently checking the parent', async () => {
+    const { parentRef } = await getRefs()
+
+    const req = new Request('http://t/api/redemptions', {
+      method: 'POST',
+      headers: agentHeaders(parentRef),
+      body: JSON.stringify({ rewardId: IDS.rewardSnack }),
+    })
+    const res = await REDEEM(req)
+    const env = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(env.ok).toBe(false)
+    expect(env.error.code).toBe('BAD_REQUEST')
+    expect(await prisma.rewardRedemption.count()).toBe(0)
+  })
+
+  it("a parent from ANOTHER family cannot redeem for a child not in their family → 403, nothing created", async () => {
+    const { parentRef } = await getRefs()
+    const famB = await seedFamilyB()
+
+    const req = new Request('http://t/api/redemptions', {
+      method: 'POST',
+      headers: agentHeaders(parentRef),
+      body: JSON.stringify({ rewardId: IDS.rewardSnack, user: famB.childId }),
+    })
+    const res = await REDEEM(req)
+    const env = await res.json()
+
+    expect(res.status).toBe(403)
+    expect(env.ok).toBe(false)
+    expect(env.error.code).toBe('FORBIDDEN')
+    expect(
+      await prisma.rewardRedemption.count({ where: { redeemedBy: famB.childId } }),
+    ).toBe(0)
+  })
+
+  it('a child cannot redeem "as" a sibling by passing user — self-scope is still enforced', async () => {
+    const { childARef, childBId } = await getRefs()
+    const before = await totalXpOf(childBId) // 600
+
+    const req = new Request('http://t/api/redemptions', {
+      method: 'POST',
+      headers: agentHeaders(childARef),
+      body: JSON.stringify({ rewardId: IDS.rewardSnack, user: childBId }),
+    })
+    const res = await REDEEM(req)
+    const env = await res.json()
+
+    expect(res.status).toBe(403)
+    expect(env.ok).toBe(false)
+    expect(env.error.code).toBe('FORBIDDEN')
+    expect(await totalXpOf(childBId)).toBe(before)
+    expect(await prisma.rewardRedemption.count()).toBe(0)
+  })
+
+  it('a child omitting user still redeems for themselves — self-service path unchanged', async () => {
+    const { childARef, childAId } = await getRefs()
+    const before = await totalXpOf(childAId)
+
+    const req = new Request('http://t/api/redemptions', {
+      method: 'POST',
+      headers: agentHeaders(childARef),
+      body: JSON.stringify({ rewardId: IDS.rewardSnack }),
+    })
+    const res = await REDEEM(req)
+    const env = await res.json()
+
+    expect(res.status).toBe(201)
+    expect(env.data.redemption.redeemedBy).toBe(childAId)
     expect(await totalXpOf(childAId)).toBe(before)
   })
 })
