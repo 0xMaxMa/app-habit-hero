@@ -1,15 +1,12 @@
 /**
  * tests/integration/settings.test.ts — API integration for the Settings surface
- * (S8): family rename, the member roster CRUD, and the one-time setup guard.
+ * (S8): family rename and the member roster CRUD.
  *
  * Drives the real route handlers against the real test Postgres (no HTTP boot),
- * asserting DB side-effects — never UI wording. The seeded fixture already has a
- * parent + two children (prisma/seed.test.ts), so `needsSetup` is false and the
- * bootstrap endpoint must refuse.
+ * asserting DB side-effects — never UI wording.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { GET as setupGet, POST as setupPost } from '@/app/api/setup/route'
 import { GET as familyGet, PATCH as familyPatch } from '@/app/api/family/route'
 import { GET as membersGet, POST as membersPost } from '@/app/api/members/route'
 import { PATCH as memberPatch, DELETE as memberDelete } from '@/app/api/members/[id]/route'
@@ -30,31 +27,6 @@ function jsonReq(url: string, actorRef: string, method: string, body?: unknown):
 
 beforeEach(async () => {
   await resetAndSeed()
-})
-
-describe('setup (one-time bootstrap)', () => {
-  it('GET reports needsSetup=false once a parent exists', async () => {
-    const res = await setupGet(new Request(`${ORIGIN}/api/setup`))
-    const body = await res.json()
-    expect(body.ok).toBe(true)
-    expect(body.data.needsSetup).toBe(false)
-  })
-
-  it('POST refuses (409) when a parent already exists', async () => {
-    const res = await setupPost(
-      new Request(`${ORIGIN}/api/setup`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email: 'new@x.local', password: 'password123' }),
-      }),
-    )
-    expect(res.status).toBe(409)
-    const body = await res.json()
-    expect(body.ok).toBe(false)
-    expect(body.error.code).toBe('CONFLICT')
-    // No second family/parent was created.
-    expect(await prisma.family.count()).toBe(1)
-  })
 })
 
 describe('family rename', () => {

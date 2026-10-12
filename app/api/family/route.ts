@@ -21,7 +21,7 @@ export const GET = withHandler(async (req) => {
   const actor = await resolveActor(req)
   const family = await prisma.family.findUnique({
     where: { id: actor.familyId },
-    select: { id: true, name: true },
+    select: { id: true, name: true, pinSlug: true },
   })
   if (!family) throw notFound('Family not found')
   return ok({ family })

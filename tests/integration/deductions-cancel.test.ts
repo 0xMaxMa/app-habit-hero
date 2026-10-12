@@ -17,6 +17,7 @@ import { POST as CANCEL } from '@/app/api/deductions/[id]/cancel/route'
 import { addXp } from '@/lib/xp'
 import { levelForXp } from '@/lib/level'
 import { resetAndSeed, getRefs, prisma } from './helpers/db'
+import { generatePinSlug } from '@/lib/pin-slug'
 import { agentHeaders, AGENT_TOKEN } from './helpers/actor'
 
 beforeEach(async () => {
@@ -53,7 +54,7 @@ async function makeDeduction(parentRef: string, userId: string, amount: number, 
 
 /** A second family with its own parent + child (150 XP), to prove cross-family refusal. */
 async function seedFamilyB() {
-  const family = await prisma.family.create({ data: { name: 'ครอบครัวบี' } })
+  const family = await prisma.family.create({ data: { name: 'ครอบครัวบี', pinSlug: generatePinSlug() } })
   const parent = await prisma.user.create({
     data: {
       name: 'พ่อบี',

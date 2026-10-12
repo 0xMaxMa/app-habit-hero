@@ -5,10 +5,13 @@
  *   DELETE → remove a member (child or co-parent) from the family.
  *
  * Parent-only and family-scoped: the target must belong to the acting parent's
- * own family (T30), otherwise it's a 404 (we don't leak other families' users).
+ * own family, enforced with the shared `assertFamily` (lib/api/authz.ts) — the
+ * same helper every other family-scoped route uses (T30). A missing id is a
+ * 404; a real member in a DIFFERENT family is a 403, same as every other
+ * family-scoped resource in this API (e.g. app/api/chores/[id]).
  * Guardrails: PINs only apply to children; you can't delete your own account,
- * and you can't delete the last remaining parent — that keeps the single family
- * from ever losing its last account and locking everyone out.
+ * and you can't delete the last remaining parent — that keeps a family from
+ * ever losing its last account and locking everyone out.
  */
 
 import bcrypt from 'bcryptjs'
@@ -20,8 +23,10 @@ import {
   parseBody,
   resolveActor,
   assertParent,
+  assertFamily,
   notFound,
   badRequest,
+  type Actor,
 } from '@/lib/api'
 import { isValidPinFormat } from '@/lib/onboarding'
 
@@ -36,12 +41,11 @@ const patchSchema = z
     message: 'ไม่มีข้อมูลให้แก้ไข',
   })
 
-/** Load a member that must live in the acting parent's family, or 404. */
-async function memberInFamily(id: string, familyId: string) {
+/** Load a member that must live in the acting parent's family. */
+async function memberInFamily(id: string, actor: Actor) {
   const user = await prisma.user.findUnique({ where: { id } })
-  if (!user || user.familyId !== familyId) {
-    throw notFound('ไม่พบสมาชิกในครอบครัวนี้')
-  }
+  if (!user) throw notFound('ไม่พบสมาชิก')
+  assertFamily(actor, user.familyId)
   return user
 }
 
@@ -49,7 +53,7 @@ export const PATCH = withHandler<{ params: { id: string } }>(async (req, { param
   const actor = await resolveActor(req)
   assertParent(actor)
 
-  const target = await memberInFamily(params.id, actor.familyId)
+  const target = await memberInFamily(params.id, actor)
   const { name, pin } = await parseBody(req, patchSchema)
 
   if (pin !== undefined && target.role !== 'child') {
@@ -91,7 +95,7 @@ export const DELETE = withHandler<{ params: { id: string } }>(async (req, { para
   const actor = await resolveActor(req)
   assertParent(actor)
 
-  const target = await memberInFamily(params.id, actor.familyId)
+  const target = await memberInFamily(params.id, actor)
 
   // You can never delete your own account (that would kill your own session and
   // is almost always a mistake) …

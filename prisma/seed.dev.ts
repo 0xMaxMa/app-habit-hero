@@ -41,7 +41,7 @@ async function main() {
   // --- Family ---
   await prisma.family.upsert({
     where: { id: IDS.family },
-    create: { id: IDS.family, name: 'ครอบครัวตัวอย่าง' },
+    create: { id: IDS.family, name: 'ครอบครัวตัวอย่าง', pinSlug: 'pin-dev-fam' },
     update: { name: 'ครอบครัวตัวอย่าง' },
   })
 

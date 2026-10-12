@@ -22,6 +22,7 @@ import { DELETE as DELETE_REWARD } from '@/app/api/rewards/[id]/route'
 import { IDS } from '@/prisma/seed.test'
 import { addXp } from '@/lib/xp'
 import { resetAndSeed, getRefs, prisma } from './helpers/db'
+import { generatePinSlug } from '@/lib/pin-slug'
 import { agentHeaders } from './helpers/actor'
 
 beforeEach(async () => {
@@ -38,7 +39,7 @@ async function totalXpOf(userId: string): Promise<number> {
  * refusal — mirrors tests/integration/deductions.test.ts seedFamilyB.
  */
 async function seedFamilyB() {
-  const family = await prisma.family.create({ data: { name: 'ครอบครัวบี' } })
+  const family = await prisma.family.create({ data: { name: 'ครอบครัวบี', pinSlug: generatePinSlug() } })
   const parent = await prisma.user.create({
     data: {
       name: 'พ่อบี',

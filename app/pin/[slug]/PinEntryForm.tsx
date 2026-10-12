@@ -12,14 +12,9 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { signIn } from 'next-auth/react'
 import { Avatar } from '@/components/ui'
+import type { ChildOption } from '@/lib/pin-picker'
 
-export interface ChildOption {
-  id: string
-  name: string
-  familyId: string
-  /** Uploaded avatar as an inlined data URI, or null → illustrated fallback. */
-  avatar: string | null
-}
+export type { ChildOption }
 
 export default function PinEntryForm({ kids }: { kids: ChildOption[] }) {
   const router = useRouter()

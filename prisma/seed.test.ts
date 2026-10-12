@@ -34,6 +34,7 @@ export const IDS = {
   rewardGame: 'rew_test_game',
   rewardSnack: 'rew_test_snack',
   rewardJapan: 'rew_test_japan',
+  familyPinSlug: 'pin-test-fam',
 } as const
 
 /**
@@ -52,7 +53,7 @@ export async function seedTestData(prisma: PrismaClient) {
   // --- Family: "ครอบครัวเทสต์" ---
   await prisma.family.upsert({
     where: { id: IDS.family },
-    create: { id: IDS.family, name: 'ครอบครัวเทสต์' },
+    create: { id: IDS.family, name: 'ครอบครัวเทสต์', pinSlug: IDS.familyPinSlug },
     update: { name: 'ครอบครัวเทสต์' },
   })
 

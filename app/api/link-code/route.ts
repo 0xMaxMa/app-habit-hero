@@ -5,7 +5,8 @@
  * their own family. The code is stored on that `User.linkCode` (@unique); the
  * agent later redeems it once via POST /api/link (T18) to bind a channel
  * identity to the account. Parents may only issue codes for users in their own
- * family (family-scoped authz, T17/T30).
+ * family — enforced with the shared `assertFamily` (lib/api/authz.ts), the
+ * same helper every other family-scoped route uses (T17/T30).
  */
 
 import { randomInt } from 'crypto'
@@ -18,6 +19,7 @@ import {
   parseBody,
   resolveActor,
   assertParent,
+  assertFamily,
   notFound,
   conflict,
 } from '@/lib/api'
@@ -54,11 +56,8 @@ export const POST = withHandler(async (req) => {
   const { userId } = await parseBody(req, bodySchema)
 
   const target = await prisma.user.findUnique({ where: { id: userId } })
-  if (!target || target.familyId !== actor.familyId) {
-    // Same response whether the user is missing or in another family — don't
-    // leak the existence of other families' users.
-    throw notFound('User not found in your family')
-  }
+  if (!target) throw notFound('User not found')
+  assertFamily(actor, target.familyId)
 
   // Mint a unique code, retrying on the rare linkCode @unique collision.
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -77,3 +76,4 @@ export const POST = withHandler(async (req) => {
 
   throw conflict('Could not generate a unique link code, please retry')
 })
+
