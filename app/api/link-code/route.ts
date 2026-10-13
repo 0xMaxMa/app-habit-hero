@@ -11,8 +11,8 @@
 
 import { randomInt } from 'crypto'
 import { z } from 'zod'
-import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db'
+import { isUniqueViolation } from '@/lib/api/tx'
 import {
   withHandler,
   ok,
@@ -41,12 +41,6 @@ function generateCode(): string {
     out += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]
   }
   return out
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
-  )
 }
 
 export const POST = withHandler(async (req) => {

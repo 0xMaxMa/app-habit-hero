@@ -11,9 +11,11 @@
  * POST → create Family (with a fresh pinSlug — see lib/pin-slug.ts, the
  *        /pin/<slug> scoping this family's child PIN picker) + parent User
  *        (bcrypt-hashed password) + UserProgress, all in one transaction. The
- *        email-uniqueness check runs BEFORE the transaction opens so a
- *        duplicate-email attempt never leaves behind an orphaned Family row
- *        with no parent.
+ *        email-uniqueness check runs BEFORE the transaction opens so the
+ *        common duplicate-email case never pays for opening one; a genuine
+ *        concurrent duplicate that races past that check still hits the
+ *        email @unique constraint inside the transaction and is caught below
+ *        as a clean 409, not a raw 500.
  *
  * After POST succeeds the client signs in and is sent to /onboarding to name
  * the family, add children and pick starter chores (that wizard already
@@ -24,6 +26,7 @@ import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { prisma } from '@/lib/db'
 import { createFamilyWithPinSlug } from '@/lib/pin-slug'
+import { isUniqueViolation } from '@/lib/api/tx'
 import { withHandler, ok, parseBody, conflict } from '@/lib/api'
 
 export const dynamic = 'force-dynamic'
@@ -44,23 +47,39 @@ export const POST = withHandler(async (req) => {
 
   const passwordHash = await bcrypt.hash(password, 10)
 
-  // One transaction so a mid-way failure (e.g. the rare pinSlug collision
-  // retry running out, or a race on the email we just checked) never leaves
-  // an orphaned Family with no parent.
-  const result = await prisma.$transaction(async (tx) => {
-    const family = await createFamilyWithPinSlug(tx, familyName)
-    const parent = await tx.user.create({
-      data: {
-        name: parentName,
-        role: 'parent',
-        familyId: family.id,
-        email: normalizedEmail,
-        passwordHash,
-      },
-    })
-    await tx.userProgress.create({ data: { userId: parent.id } })
-    return { familyId: family.id, userId: parent.id, email: parent.email }
-  })
-
-  return ok(result, { status: 201 })
+  // One transaction so a mid-way failure (e.g. a race on the email we just
+  // checked) never leaves an orphaned Family with no parent. Retried, as a
+  // WHOLE new transaction each time, on the rare pinSlug collision — a
+  // `family` set right after it succeeds tells the catch below whether a
+  // P2002 happened before or after that point, since Postgres aborts the
+  // whole transaction on any error and a second statement on the same `tx`
+  // cannot be trusted to retry cleanly.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let pastFamilyCreation = false
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const family = await createFamilyWithPinSlug(tx, familyName)
+        pastFamilyCreation = true
+        const parent = await tx.user.create({
+          data: {
+            name: parentName,
+            role: 'parent',
+            familyId: family.id,
+            email: normalizedEmail,
+            passwordHash,
+          },
+        })
+        await tx.userProgress.create({ data: { userId: parent.id } })
+        return { familyId: family.id, userId: parent.id, email: parent.email }
+      })
+      return ok(result, { status: 201 })
+    } catch (err) {
+      if (!pastFamilyCreation && isUniqueViolation(err) && attempt < 4) continue
+      if (pastFamilyCreation && isUniqueViolation(err)) {
+        throw conflict(`อีเมล ${normalizedEmail} ถูกใช้แล้ว`)
+      }
+      throw err
+    }
+  }
+  throw conflict('ไม่สามารถสร้างครอบครัวได้ กรุณาลองใหม่')
 })

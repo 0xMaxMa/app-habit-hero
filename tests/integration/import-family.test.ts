@@ -244,7 +244,7 @@ describe('importFamily — full round trip', () => {
     expect(newAdjustment.xpDelta).toBe(-10)
     expect(newAdjustment.createdBy).toBe(newParent.id)
 
-    // Badge matched by name against the EXISTING catalog, not duplicated.
+    // Badge matched by id against the EXISTING catalog, not duplicated.
     const newUserBadge = await prisma.userBadge.findFirstOrThrow({
       where: { userId: newChild.id },
     })
@@ -264,7 +264,7 @@ describe('importFamily — full round trip', () => {
       ...snapshot,
       userBadges: [
         ...snapshot.userBadges,
-        { userSourceId: src.childId, badgeName: 'ป้ายที่ไม่มีอยู่จริง', earnedAt: new Date(), seenAt: null },
+        { userSourceId: src.childId, badgeId: 'not_a_real_badge_id', earnedAt: new Date(), seenAt: null },
       ],
     }
 

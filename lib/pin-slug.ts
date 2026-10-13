@@ -25,28 +25,24 @@ export function generatePinSlug(): string {
   return out
 }
 
-function isUniqueViolation(err: unknown): boolean {
-  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
-}
-
 /**
- * Create a Family with a guaranteed-unique pinSlug, retrying on the rare
- * @unique collision rather than trusting randomInt() never repeats.
+ * Create a Family with a freshly generated pinSlug. A single attempt: `db`
+ * may be a handle into an already-open transaction, and Postgres aborts the
+ * whole transaction on the first error — a second `create` on that same `db`
+ * would fail with "current transaction is aborted" (25P02), not the P2002 a
+ * naive retry-on-collision loop here would expect to catch. On the rare
+ * @unique collision (astronomically unlikely at `SLUG_LENGTH` 10, but not
+ * impossible), callers must retry by re-running their ENTIRE enclosing
+ * `$transaction` (which calls back in here and gets a new pinSlug) — see
+ * `isUniqueViolation` (lib/api/tx.ts) and its callers in app/api/signup and
+ * lib/import-family for the pattern.
  */
 export async function createFamilyWithPinSlug(
   db: FamilyWriter,
   name: string,
 ): Promise<{ id: string; name: string; pinSlug: string }> {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      return await db.family.create({
-        data: { name, pinSlug: generatePinSlug() },
-        select: { id: true, name: true, pinSlug: true },
-      })
-    } catch (err) {
-      if (isUniqueViolation(err) && attempt < 4) continue
-      throw err
-    }
-  }
-  throw new Error('Could not generate a unique pin slug, please retry')
+  return db.family.create({
+    data: { name, pinSlug: generatePinSlug() },
+    select: { id: true, name: true, pinSlug: true },
+  })
 }

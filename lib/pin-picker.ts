@@ -21,43 +21,42 @@ export interface ChildOption {
 
 /**
  * Resolve `slug` to its Family and return ONLY that family's children who
- * have a PIN set — or `null` when the slug does not resolve to any family
- * (an invalid/typo'd code, or the DB being unavailable). There is no code
- * path here that can return a child without a resolved, matching familyId.
+ * have a PIN set — or `null` when the slug itself does not resolve to any
+ * family (an invalid/typo'd code). A transient failure (DB unreachable, pool
+ * exhausted) is NOT treated as "not found" — it propagates so the caller's
+ * error boundary handles it, rather than looking identical to a bad slug and
+ * having the caller (app/pin/[slug]/page.tsx's `ForgetSlug`) wipe a perfectly
+ * valid bookmarked slug over what may just be a blip.
  */
 export async function loadFamilyChildrenBySlug(slug: string): Promise<ChildOption[] | null> {
-  try {
-    const family = await prisma.family.findUnique({
-      where: { pinSlug: slug },
-      select: { id: true },
-    })
-    if (!family) return null
+  const family = await prisma.family.findUnique({
+    where: { pinSlug: slug },
+    select: {
+      id: true,
+      members: {
+        where: { role: 'child', pinHash: { not: null } },
+        select: { id: true, name: true, familyId: true, avatarUrl: true },
+        orderBy: { name: 'asc' },
+      },
+    },
+  })
+  if (!family) return null
 
-    const kids = await prisma.user.findMany({
-      where: { role: 'child', familyId: family.id, pinHash: { not: null } },
-      select: { id: true, name: true, familyId: true, avatarUrl: true },
-      orderBy: { name: 'asc' },
-    })
-    // The picker is a PUBLIC (pre-login) page, but /api/avatars is auth-gated —
-    // a client <img> would 401. So inline each uploaded avatar as a data URI on
-    // the server instead of opening the avatar route to unauthenticated users.
-    return Promise.all(
-      kids.map(async (k) => {
-        let avatar: string | null = null
-        if (k.avatarUrl) {
-          try {
-            const { data, contentType } = await readPhoto(path.basename(k.avatarUrl))
-            avatar = `data:${contentType};base64,${data.toString('base64')}`
-          } catch {
-            avatar = null // file missing → fall back to the illustrated face
-          }
+  // The picker is a PUBLIC (pre-login) page, but /api/avatars is auth-gated —
+  // a client <img> would 401. So inline each uploaded avatar as a data URI on
+  // the server instead of opening the avatar route to unauthenticated users.
+  return Promise.all(
+    family.members.map(async (k) => {
+      let avatar: string | null = null
+      if (k.avatarUrl) {
+        try {
+          const { data, contentType } = await readPhoto(path.basename(k.avatarUrl))
+          avatar = `data:${contentType};base64,${data.toString('base64')}`
+        } catch {
+          avatar = null // file missing → fall back to the illustrated face
         }
-        return { id: k.id, name: k.name, familyId: k.familyId, avatar }
-      }),
-    )
-  } catch {
-    // DB unavailable — the caller renders "not found" rather than a 500;
-    // never fall back to an unscoped list.
-    return null
-  }
+      }
+      return { id: k.id, name: k.name, familyId: k.familyId, avatar }
+    }),
+  )
 }

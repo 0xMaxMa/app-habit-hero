@@ -266,7 +266,7 @@ app/
   (parent)/          หน้าเว็บฝั่งผู้ปกครอง — dashboard, approvals, chores, rewards, history, settings
   (child)/           หน้าเว็บฝั่งเด็ก — tasks, rewards, badges, history
   api/               REST API ที่ทั้งหน้าเว็บและ agent เรียกร่วมกัน
-  setup/ onboarding/ login/ pin/
+  signup/ onboarding/ login/ pin/[slug]/
 lib/
   api/               ตัวช่วยฝั่ง API — authz, validate, respond, gamification, photo
   badges.ts level.ts xp.ts streak.ts point-rules.ts clock.ts

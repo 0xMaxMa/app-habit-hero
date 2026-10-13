@@ -95,4 +95,24 @@ describe('POST /api/signup', () => {
     expect(res.status).toBe(400)
     expect(await prisma.family.count()).toBe(1)
   })
+
+  it('answers a genuine concurrent duplicate-email race with 409, not a raw 500', async () => {
+    // Two requests for the same brand-new email, fired together so both can
+    // race past the pre-check before either commits its transaction — the
+    // email @unique constraint, not the pre-check, is what must catch this.
+    const body = () => signupReq({ email: 'racer@test.local', password: 'password123' })
+    const [first, second] = await Promise.all([signup(body()), signup(body())])
+
+    const statuses = [first.status, second.status].sort()
+    expect(statuses).toEqual([201, 409])
+
+    const loser = first.status === 409 ? first : second
+    const loserBody = await loser.json()
+    expect(loserBody.ok).toBe(false)
+    expect(loserBody.error.code).toBe('CONFLICT')
+
+    // Exactly one family was created — the loser left no orphaned Family.
+    expect(await prisma.family.count()).toBe(2) // seeded fixture family + the one winner
+    expect(await prisma.user.count({ where: { email: 'racer@test.local' } })).toBe(1)
+  })
 })

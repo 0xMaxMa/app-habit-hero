@@ -41,13 +41,17 @@
  * falls back to the illustrated character) and `linkCode` (a one-time code;
  * the parent can mint a fresh one post-import via POST /api/link-code).
  * `Badge` rows are the global curated catalog (schema.prisma's comment: not
- * family-scoped by design) — matched by NAME against the target's existing
- * catalog rather than re-created, so UserBadge can point at the catalog this
- * deployment already seeded (prisma/seed-badges.ts).
+ * family-scoped by design) — matched by the catalog's stable id (the slug
+ * prisma/seed-badges.ts upserts by, identical on every deployment) against
+ * the target's existing catalog rather than re-created, so UserBadge can
+ * point at the catalog this deployment already seeded. `.name` is NOT used
+ * for the match — it has no @unique constraint, so it cannot be trusted to
+ * resolve to one row.
  */
 
 import type { PrismaClient, Role, Recurrence, ChoreCategory, CompletionStatus, RedemptionStatus } from '@prisma/client'
 import { createFamilyWithPinSlug } from './pin-slug'
+import { isUniqueViolation } from './api/tx'
 
 // ---------------------------------------------------------------------------
 // Snapshot shape — what exportFamilySnapshot reads and importFamily writes.
@@ -150,7 +154,14 @@ export interface PointAdjustmentSnapshot {
 
 export interface UserBadgeSnapshot {
   userSourceId: string
-  badgeName: string
+  /**
+   * Badge.id, not .name — the curated catalog (prisma/seed-badges.ts) keys
+   * every row by a stable hand-picked slug applied identically by every
+   * deployment's migrations, whereas .name has no @unique constraint and a
+   * name-based lookup would be ambiguous (and silently wrong) the day two
+   * catalog rows ever share a name.
+   */
+  badgeId: string
   earnedAt: Date
   seenAt: Date | null
 }
@@ -187,9 +198,10 @@ export async function exportFamilySnapshot(
   db: PrismaClient,
   familyId: string,
 ): Promise<FamilySnapshot> {
-  const family = await db.family.findUniqueOrThrow({ where: { id: familyId } })
-
-  const users = await db.user.findMany({ where: { familyId } })
+  const [family, users] = await Promise.all([
+    db.family.findUniqueOrThrow({ where: { id: familyId } }),
+    db.user.findMany({ where: { familyId } }),
+  ])
   const userIds = users.map((u) => u.id)
 
   const [progress, chores, rewards] = await Promise.all([
@@ -204,7 +216,7 @@ export async function exportFamilySnapshot(
     db.choreCompletion.findMany({ where: { choreId: { in: choreIds } } }),
     db.rewardRedemption.findMany({ where: { rewardId: { in: rewardIds } } }),
     db.pointAdjustment.findMany({ where: { userId: { in: userIds } } }),
-    db.userBadge.findMany({ where: { userId: { in: userIds } }, include: { badge: true } }),
+    db.userBadge.findMany({ where: { userId: { in: userIds } } }),
   ])
 
   return {
@@ -287,7 +299,7 @@ export async function exportFamilySnapshot(
     })),
     userBadges: userBadges.map((ub) => ({
       userSourceId: ub.userId,
-      badgeName: ub.badge.name,
+      badgeId: ub.badgeId,
       earnedAt: ub.earnedAt,
       seenAt: ub.seenAt,
     })),
@@ -370,174 +382,200 @@ export async function importFamily(
     )
   }
 
-  return targetDb.$transaction(async (tx) => {
-    const family = await createFamilyWithPinSlug(tx, snapshot.family.name)
+  // Wrapped in a retry loop, re-running the WHOLE transaction on a pinSlug
+  // collision: `checkImportCollisions` above already proves every OTHER
+  // unique field (email, channelUserRef) is clash-free, so any P2002 raised
+  // inside this transaction can only be the pinSlug — and Postgres aborts the
+  // whole transaction on that first error, so a retry must open a fresh one
+  // (see createFamilyWithPinSlug, lib/pin-slug.ts) rather than reuse `tx`.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await targetDb.$transaction(async (tx) => {
+        const family = await createFamilyWithPinSlug(tx, snapshot.family.name)
 
-    // --- Users (no FK dependencies among themselves) ---
-    const userIdMap = new Map<string, string>()
-    for (const u of snapshot.users) {
-      const created = await tx.user.create({
-        data: {
-          name: u.name,
-          role: u.role,
+        // --- Users (no FK dependencies among themselves) ---
+        const userIdMap = new Map<string, string>()
+        for (const u of snapshot.users) {
+          const created = await tx.user.create({
+            data: {
+              name: u.name,
+              role: u.role,
+              familyId: family.id,
+              channelUserRef: u.channelUserRef,
+              avatarCharacter: u.avatarCharacter,
+              email: u.email,
+              passwordHash: u.passwordHash,
+              pinHash: u.pinHash,
+              // avatarUrl / linkCode deliberately not carried over — see header.
+            },
+          })
+          userIdMap.set(u.sourceId, created.id)
+        }
+        const mapUser = (sourceId: string) => requireMapped(userIdMap, sourceId, 'user')
+        const mapUserOrNull = (sourceId: string | null) =>
+          sourceId === null ? null : mapUser(sourceId)
+
+        // --- UserProgress ---
+        for (const p of snapshot.userProgress) {
+          await tx.userProgress.create({
+            data: {
+              userId: mapUser(p.userSourceId),
+              totalXp: p.totalXp,
+              currentLevel: p.currentLevel,
+              currentStreak: p.currentStreak,
+              longestStreak: p.longestStreak,
+              lastActiveDate: p.lastActiveDate,
+            },
+          })
+        }
+
+        // --- Chores (assignedTo → user, nullable) ---
+        const choreIdMap = new Map<string, string>()
+        for (const c of snapshot.chores) {
+          const created = await tx.chore.create({
+            data: {
+              title: c.title,
+              description: c.description,
+              familyId: family.id,
+              assignedTo: mapUserOrNull(c.assignedToSourceId),
+              xpValue: c.xpValue,
+              lateXpMultiplier: c.lateXpMultiplier,
+              recurrence: c.recurrence,
+              category: c.category,
+              recurDays: c.recurDays,
+              dueTime: c.dueTime,
+              activeFrom: c.activeFrom,
+              activeUntil: c.activeUntil,
+              requirePhoto: c.requirePhoto,
+              isExtra: c.isExtra,
+            },
+          })
+          choreIdMap.set(c.sourceId, created.id)
+        }
+        const mapChore = (sourceId: string) => requireMapped(choreIdMap, sourceId, 'chore')
+
+        // --- Rewards ---
+        const rewardIdMap = new Map<string, string>()
+        for (const r of snapshot.rewards) {
+          const created = await tx.reward.create({
+            data: {
+              title: r.title,
+              description: r.description,
+              familyId: family.id,
+              xpCost: r.xpCost,
+              iconEmoji: r.iconEmoji,
+              dailyLimit: r.dailyLimit,
+              weeklyLimit: r.weeklyLimit,
+              monthlyLimit: r.monthlyLimit,
+              isActive: r.isActive,
+            },
+          })
+          rewardIdMap.set(r.sourceId, created.id)
+        }
+        const mapReward = (sourceId: string) => requireMapped(rewardIdMap, sourceId, 'reward')
+
+        // --- ChoreCompletions (chore, completedBy, reviewedBy, teamMembers) ---
+        for (const c of snapshot.choreCompletions) {
+          await tx.choreCompletion.create({
+            data: {
+              choreId: mapChore(c.choreSourceId),
+              completedBy: mapUser(c.completedBySourceId),
+              // The photo itself lives on the SOURCE deployment's volume and was
+              // never transferred — keep the historical URL as a record, even
+              // though GET /api/photos will 404 on it until/unless the owner also
+              // copies the underlying files. Re-uploading history is out of scope.
+              photoUrl: c.photoUrl,
+              submittedAt: c.submittedAt,
+              status: c.status,
+              reviewedBy: mapUserOrNull(c.reviewedBySourceId),
+              reviewedAt: c.reviewedAt,
+              xpAwarded: c.xpAwarded,
+              feedback: c.feedback,
+              isTeam: c.isTeam,
+              teamMembers: c.teamMemberSourceIds.map(mapUser),
+            },
+          })
+        }
+
+        // --- RewardRedemptions ---
+        for (const r of snapshot.rewardRedemptions) {
+          await tx.rewardRedemption.create({
+            data: {
+              rewardId: mapReward(r.rewardSourceId),
+              redeemedBy: mapUser(r.redeemedBySourceId),
+              xpSpent: r.xpSpent,
+              requestedAt: r.requestedAt,
+              status: r.status,
+              reviewedAt: r.reviewedAt,
+            },
+          })
+        }
+
+        // --- PointAdjustments ---
+        for (const a of snapshot.pointAdjustments) {
+          await tx.pointAdjustment.create({
+            data: {
+              userId: mapUser(a.userSourceId),
+              xpDelta: a.xpDelta,
+              reason: a.reason,
+              xpApplied: a.xpApplied,
+              createdBy: mapUserOrNull(a.createdBySourceId),
+              cancelledAt: a.cancelledAt,
+              cancelledBy: mapUserOrNull(a.cancelledBySourceId),
+              createdAt: a.createdAt,
+            },
+          })
+        }
+
+        // --- UserBadges (Badge is the global catalog — matched by id, never
+        // created here; prisma/seed-badges.ts is what owns that table).
+        // Resolved in one query up front rather than once per badge, since
+        // the whole point is to check against a small, rarely-changing table.
+        const wantedBadgeIds = Array.from(new Set(snapshot.userBadges.map((ub) => ub.badgeId)))
+        const existingBadgeIds = new Set(
+          wantedBadgeIds.length > 0
+            ? (
+                await tx.badge.findMany({
+                  where: { id: { in: wantedBadgeIds } },
+                  select: { id: true },
+                })
+              ).map((b) => b.id)
+            : [],
+        )
+        let userBadgesCreated = 0
+        for (const ub of snapshot.userBadges) {
+          if (!existingBadgeIds.has(ub.badgeId)) continue // catalog entry doesn't exist on this deployment — skip, don't invent one
+          await tx.userBadge.create({
+            data: {
+              userId: mapUser(ub.userSourceId),
+              badgeId: ub.badgeId,
+              earnedAt: ub.earnedAt,
+              seenAt: ub.seenAt,
+            },
+          })
+          userBadgesCreated++
+        }
+
+        return {
           familyId: family.id,
-          channelUserRef: u.channelUserRef,
-          avatarCharacter: u.avatarCharacter,
-          email: u.email,
-          passwordHash: u.passwordHash,
-          pinHash: u.pinHash,
-          // avatarUrl / linkCode deliberately not carried over — see header.
-        },
+          pinSlug: family.pinSlug,
+          counts: {
+            users: snapshot.users.length,
+            chores: snapshot.chores.length,
+            rewards: snapshot.rewards.length,
+            choreCompletions: snapshot.choreCompletions.length,
+            rewardRedemptions: snapshot.rewardRedemptions.length,
+            pointAdjustments: snapshot.pointAdjustments.length,
+            userBadges: userBadgesCreated,
+          },
+        }
       })
-      userIdMap.set(u.sourceId, created.id)
+    } catch (err) {
+      if (isUniqueViolation(err) && attempt < 4) continue
+      throw err
     }
-    const mapUser = (sourceId: string) => requireMapped(userIdMap, sourceId, 'user')
-    const mapUserOrNull = (sourceId: string | null) =>
-      sourceId === null ? null : mapUser(sourceId)
-
-    // --- UserProgress ---
-    for (const p of snapshot.userProgress) {
-      await tx.userProgress.create({
-        data: {
-          userId: mapUser(p.userSourceId),
-          totalXp: p.totalXp,
-          currentLevel: p.currentLevel,
-          currentStreak: p.currentStreak,
-          longestStreak: p.longestStreak,
-          lastActiveDate: p.lastActiveDate,
-        },
-      })
-    }
-
-    // --- Chores (assignedTo → user, nullable) ---
-    const choreIdMap = new Map<string, string>()
-    for (const c of snapshot.chores) {
-      const created = await tx.chore.create({
-        data: {
-          title: c.title,
-          description: c.description,
-          familyId: family.id,
-          assignedTo: mapUserOrNull(c.assignedToSourceId),
-          xpValue: c.xpValue,
-          lateXpMultiplier: c.lateXpMultiplier,
-          recurrence: c.recurrence,
-          category: c.category,
-          recurDays: c.recurDays,
-          dueTime: c.dueTime,
-          activeFrom: c.activeFrom,
-          activeUntil: c.activeUntil,
-          requirePhoto: c.requirePhoto,
-          isExtra: c.isExtra,
-        },
-      })
-      choreIdMap.set(c.sourceId, created.id)
-    }
-    const mapChore = (sourceId: string) => requireMapped(choreIdMap, sourceId, 'chore')
-
-    // --- Rewards ---
-    const rewardIdMap = new Map<string, string>()
-    for (const r of snapshot.rewards) {
-      const created = await tx.reward.create({
-        data: {
-          title: r.title,
-          description: r.description,
-          familyId: family.id,
-          xpCost: r.xpCost,
-          iconEmoji: r.iconEmoji,
-          dailyLimit: r.dailyLimit,
-          weeklyLimit: r.weeklyLimit,
-          monthlyLimit: r.monthlyLimit,
-          isActive: r.isActive,
-        },
-      })
-      rewardIdMap.set(r.sourceId, created.id)
-    }
-    const mapReward = (sourceId: string) => requireMapped(rewardIdMap, sourceId, 'reward')
-
-    // --- ChoreCompletions (chore, completedBy, reviewedBy, teamMembers) ---
-    for (const c of snapshot.choreCompletions) {
-      await tx.choreCompletion.create({
-        data: {
-          choreId: mapChore(c.choreSourceId),
-          completedBy: mapUser(c.completedBySourceId),
-          // The photo itself lives on the SOURCE deployment's volume and was
-          // never transferred — keep the historical URL as a record, even
-          // though GET /api/photos will 404 on it until/unless the owner also
-          // copies the underlying files. Re-uploading history is out of scope.
-          photoUrl: c.photoUrl,
-          submittedAt: c.submittedAt,
-          status: c.status,
-          reviewedBy: mapUserOrNull(c.reviewedBySourceId),
-          reviewedAt: c.reviewedAt,
-          xpAwarded: c.xpAwarded,
-          feedback: c.feedback,
-          isTeam: c.isTeam,
-          teamMembers: c.teamMemberSourceIds.map(mapUser),
-        },
-      })
-    }
-
-    // --- RewardRedemptions ---
-    for (const r of snapshot.rewardRedemptions) {
-      await tx.rewardRedemption.create({
-        data: {
-          rewardId: mapReward(r.rewardSourceId),
-          redeemedBy: mapUser(r.redeemedBySourceId),
-          xpSpent: r.xpSpent,
-          requestedAt: r.requestedAt,
-          status: r.status,
-          reviewedAt: r.reviewedAt,
-        },
-      })
-    }
-
-    // --- PointAdjustments ---
-    for (const a of snapshot.pointAdjustments) {
-      await tx.pointAdjustment.create({
-        data: {
-          userId: mapUser(a.userSourceId),
-          xpDelta: a.xpDelta,
-          reason: a.reason,
-          xpApplied: a.xpApplied,
-          createdBy: mapUserOrNull(a.createdBySourceId),
-          cancelledAt: a.cancelledAt,
-          cancelledBy: mapUserOrNull(a.cancelledBySourceId),
-          createdAt: a.createdAt,
-        },
-      })
-    }
-
-    // --- UserBadges (Badge is the global catalog — match by name, never
-    // created here; prisma/seed-badges.ts is what owns that table) ---
-    let userBadgesCreated = 0
-    for (const ub of snapshot.userBadges) {
-      const badge = await tx.badge.findFirst({ where: { name: ub.badgeName } })
-      if (!badge) continue // catalog entry doesn't exist on this deployment — skip, don't invent one
-      await tx.userBadge.create({
-        data: {
-          userId: mapUser(ub.userSourceId),
-          badgeId: badge.id,
-          earnedAt: ub.earnedAt,
-          seenAt: ub.seenAt,
-        },
-      })
-      userBadgesCreated++
-    }
-
-    return {
-      familyId: family.id,
-      pinSlug: family.pinSlug,
-      counts: {
-        users: snapshot.users.length,
-        chores: snapshot.chores.length,
-        rewards: snapshot.rewards.length,
-        choreCompletions: snapshot.choreCompletions.length,
-        rewardRedemptions: snapshot.rewardRedemptions.length,
-        pointAdjustments: snapshot.pointAdjustments.length,
-        userBadges: userBadgesCreated,
-      },
-    }
-  })
+  }
+  throw new Error('Could not generate a unique pin slug after 5 attempts, please retry')
 }
 
 function requireMapped(map: Map<string, string>, sourceId: string, kind: string): string {
