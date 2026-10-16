@@ -33,3 +33,12 @@ family and try again.
 - Nothing under `memory/` survives an app update. Only a file literally named `MEMORY.md`
   gets backed up by the gateway, and per-family notes no longer live there. Treat every
   note here as rebuildable, not irreplaceable.
+
+**This is app-level, not gateway-level, and that's intentional.** claude-gateway's opt-in
+`multiTenant` agent setting (per-sender isolation, `memory_search`/`memory_get` disabled)
+cannot apply to this agent — gateway refuses it for `type: "app-agent"`, which is how this
+agent is registered, and even if it could, its tenant key is per sender, not per family,
+which would split one family's notes across each linked parent. See AGENTS.md §10 for the
+full reasoning. Don't reach for `memory_search`/`memory_get` as a shortcut here either:
+this agent's archive is never built, so they would find nothing — the path above is the
+only way in or out of a family's notes.

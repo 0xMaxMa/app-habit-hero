@@ -282,4 +282,33 @@ Four rules, same as before:
   not irreplaceable; anything that truly must survive an update belongs in the app's
   database, not here.
 
+### Why this stays app-level, not gateway-level
+
+claude-gateway has an opt-in `multiTenant: { enabled: true }` agent setting (gateway PR
+#602) that scopes `USER.md`/`MEMORY.md` per external `(channel, chatId)` sender and turns
+off the `memory_search`/`memory_get` tools outright. It is tempting to read that as a
+replacement for the per-family file above. It is not, for this agent, for two independent
+reasons:
+
+1. **It cannot be turned on here.** Which agents get it is gateway runtime config
+   (`agents[].multiTenant` in claude-gateway's own `config.json`), outside this repo — but
+   that is moot: gateway's own config loader refuses `multiTenant` for `type: "app-agent"`,
+   which is exactly how this agent is registered, because a containerized app-agent's
+   context is composed inside the container, where gateway's per-tenant file composition
+   isn't wired. No config change, in this repo or gateway's, can enable it for this agent
+   today.
+2. **Its granularity is wrong for a family anyway.** Gateway's tenant key is per sender —
+   one file per `(channel, chatId)`. A HabitHero family can have more than one linked
+   `User` (both parents, say), each with their own `channel_user_ref`. Adopting that
+   granularity would split one family's memory across each parent's own tenant file,
+   losing the shared family-wide notes this section's single `family-<familyId>.md` keeps
+   intentionally unified. The per-family file is the right layer for this product even if
+   a future gateway version lifts the `app-agent` restriction.
+
+Nothing here currently calls `memory_search`/`memory_get`, and nothing needs to: gateway
+never builds this agent's searchable archive in the first place (`app-agent` workspaces
+are excluded from archive indexing independently of `multiTenant`), so there is no
+cross-family index for those tools to return even if invoked. The per-family file above
+remains the only isolation mechanism this agent has.
+
 
