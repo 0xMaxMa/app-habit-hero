@@ -284,30 +284,28 @@ Four rules, same as before:
 
 ### Why this stays app-level, not gateway-level
 
-claude-gateway has an opt-in `multiTenant: { enabled: true }` agent setting (gateway PR
-#602) that scopes `USER.md`/`MEMORY.md` per external `(channel, chatId)` sender and turns
-off the `memory_search`/`memory_get` tools outright. It is tempting to read that as a
-replacement for the per-family file above. It is not, for this agent, for two independent
-reasons:
+claude-gateway has an opt-in **isolate memory mode** (`services.agent.isolate_memory:
+true` in an app's own `app.yaml`, surfaced to the gateway as `agents[].isolateMemory` —
+gateway PR #602, renamed before merge from an early `multiTenant` draft that never
+shipped) that scopes `USER.md`/`MEMORY.md` per external `(channel, chatId)` conversation
+under `chats/` and turns off the `memory_search`/`memory_get` tools outright. PR #602 now
+lets `app-agent` type agents — how this agent is registered — turn it on through
+`app.yaml`; that used to be refused outright and no longer is. It is still not a fit for
+this agent, for one reason:
 
-1. **It cannot be turned on here.** Which agents get it is gateway runtime config
-   (`agents[].multiTenant` in claude-gateway's own `config.json`), outside this repo — but
-   that is moot: gateway's own config loader refuses `multiTenant` for `type: "app-agent"`,
-   which is exactly how this agent is registered, because a containerized app-agent's
-   context is composed inside the container, where gateway's per-tenant file composition
-   isn't wired. No config change, in this repo or gateway's, can enable it for this agent
-   today.
-2. **Its granularity is wrong for a family anyway.** Gateway's tenant key is per sender —
-   one file per `(channel, chatId)`. A HabitHero family can have more than one linked
-   `User` (both parents, say), each with their own `channel_user_ref`. Adopting that
-   granularity would split one family's memory across each parent's own tenant file,
-   losing the shared family-wide notes this section's single `family-<familyId>.md` keeps
-   intentionally unified. The per-family file is the right layer for this product even if
-   a future gateway version lifts the `app-agent` restriction.
+**Its granularity is wrong for a family.** Isolate mode keys memory by `(channel,
+chatId)` — one file per conversation. A HabitHero family can have more than one linked
+`User` (both parents, say), each with their own `channel_user_ref` and so their own
+chatId. Turning it on would split one family's memory across each parent's own
+conversation file, losing the shared family-wide notes this section's single
+`family-<familyId>.md` keeps intentionally unified. PR #602 names this exact tradeoff
+itself: an app that groups several chats into one account gets one memory per chat, and a
+per-account key would be a separate feature. The per-family file is the right layer for
+this product regardless of what gateway's own key is scoped to.
 
 Nothing here currently calls `memory_search`/`memory_get`, and nothing needs to: gateway
 never builds this agent's searchable archive in the first place (`app-agent` workspaces
-are excluded from archive indexing independently of `multiTenant`), so there is no
+are excluded from archive indexing independently of isolate memory mode), so there is no
 cross-family index for those tools to return even if invoked. The per-family file above
 remains the only isolation mechanism this agent has.
 
