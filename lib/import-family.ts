@@ -49,9 +49,10 @@
  * resolve to one row.
  */
 
-import type { PrismaClient, Role, Recurrence, ChoreCategory, CompletionStatus, RedemptionStatus } from '@prisma/client'
+import type { PrismaClient, CompletionStatus, RedemptionStatus } from '@prisma/client'
 import { createFamilyWithPinSlug } from './pin-slug'
 import { isUniqueViolation } from './api/tx'
+import type { UserWritableFields, ChoreWritableFields, RewardWritableFields } from './model-fields'
 
 // ---------------------------------------------------------------------------
 // Snapshot shape — what exportFamilySnapshot reads and importFamily writes.
@@ -69,15 +70,8 @@ export interface FamilySnapshot {
   userBadges: UserBadgeSnapshot[]
 }
 
-export interface UserSnapshot {
+export interface UserSnapshot extends UserWritableFields {
   sourceId: string
-  name: string
-  role: Role
-  channelUserRef: string | null
-  avatarCharacter: string | null
-  email: string | null
-  passwordHash: string | null
-  pinHash: string | null
 }
 
 export interface UserProgressSnapshot {
@@ -89,33 +83,13 @@ export interface UserProgressSnapshot {
   lastActiveDate: Date | null
 }
 
-export interface ChoreSnapshot {
+export interface ChoreSnapshot extends ChoreWritableFields {
   sourceId: string
-  title: string
-  description: string | null
   assignedToSourceId: string | null
-  xpValue: number
-  lateXpMultiplier: number
-  recurrence: Recurrence
-  category: ChoreCategory
-  recurDays: number[]
-  dueTime: string | null
-  activeFrom: Date | null
-  activeUntil: Date | null
-  requirePhoto: boolean
-  isExtra: boolean
 }
 
-export interface RewardSnapshot {
+export interface RewardSnapshot extends RewardWritableFields {
   sourceId: string
-  title: string
-  description: string | null
-  xpCost: number
-  iconEmoji: string | null
-  dailyLimit: number | null
-  weeklyLimit: number | null
-  monthlyLimit: number | null
-  isActive: boolean
 }
 
 export interface ChoreCompletionSnapshot {

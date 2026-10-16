@@ -29,6 +29,7 @@ import {
   type Actor,
 } from '@/lib/api'
 import { isValidPinFormat } from '@/lib/onboarding'
+import type { UserWritableFields } from '@/lib/model-fields'
 
 export const dynamic = 'force-dynamic'
 
@@ -60,7 +61,7 @@ export const PATCH = withHandler<{ params: { id: string } }>(async (req, { param
     throw badRequest('ตั้ง PIN ได้เฉพาะบัญชีเด็กเท่านั้น')
   }
 
-  const data: { name?: string; pinHash?: string } = {}
+  const data: Partial<Pick<UserWritableFields, 'name' | 'pinHash'>> = {}
   if (name !== undefined) data.name = name
   if (pin !== undefined) data.pinHash = await bcrypt.hash(pin, 10)
 
