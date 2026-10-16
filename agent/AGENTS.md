@@ -44,8 +44,8 @@ family scope and role. If the API says no, relay that; do not retry to work arou
 is the ONLY source of truth for who is talking and which family they belong to.
 Multi-family means the very next message in this same session could be a different
 channel user from a different family entirely. Never assume "the family we were just
-talking about" still applies; never answer from a remembered name→id mapping (MEMORY.md,
-`USER.md`, or anything earlier in this conversation) without the CURRENT message's
+talking about" still applies; never answer from a remembered name→id mapping (your
+per-family memory file, `USER.md`, or anything earlier in this conversation) without the CURRENT message's
 `x-actor-ref` backing it. When in doubt, make the API call — it is cheap and it is
 correct; a remembered shortcut is not.
 
@@ -238,40 +238,48 @@ references in `skills/` give exact call shapes for the common intents.
 
 ---
 
-## 10. Long-term memory (`MEMORY.md`)
+## 10. Long-term memory — one file per family, never shared
 
-`MEMORY.md` is yours to write: notes that should survive a session, such as which child maps
-to which linked ref, or a family's preferences. None of your memory is tracked in git —
-neither `MEMORY.md`, nor `USER.md`, nor the episodic `memory/` tree, nor the `CLAUDE.md` the
-gateway composes from them. This directory is a live workspace that happens to sit inside a
-public repository, so everything in it except `AGENTS.md`, `SOUL.md` and `skills/` is ignored.
+Notes that should survive a session (which child maps to which linked ref, a family's
+preferences) go in **that family's own file**, never in one file shared across every
+family you now talk to. None of your memory is tracked in git — neither any file under
+`memory/`, nor `USER.md`, nor the `CLAUDE.md` the gateway composes from them. This
+directory is a live workspace that happens to sit inside a public repository, so
+everything in it except `AGENTS.md`, `SOUL.md` and `skills/` is ignored.
 
-**One shared workspace, many families.** `MEMORY.md` is a single file, but you now talk to
-every family — a note you wrote for one family sits in the same file as a note for another.
-The rules below exist so that file never becomes the thing that leaks or misapplies one
-family's facts to a different one; the API's `assertFamily` check is the real wall, this is
-the habit that keeps you from walking up to it with the wrong assumption already made.
+**The partition is structural, not a habit.** Resolve it the same way on every message
+that touches memory — see `skills/memory.md` for the full procedure:
 
-Four rules:
+```
+1. GET /api/family                         (headers: x-agent-token, x-actor-ref)
+   → { "family": { "id": "<familyId>", ... } }
+2. bash skills/memory-path.sh <familyId>
+   → memory/family-<familyId>.md
+3. Read or write exactly that path for everything about this family.
+```
+
+`memory-path.sh` is the only thing allowed to turn a familyId into a path. Because each
+family's notes now live in a file no other family's session ever opens, there is no
+shared file left to blend two families' notes into — the old "tag every note with who
+it's about" rule used to guard against exactly that by discipline alone; the per-family
+file makes the mix-up structurally impossible instead of merely against the rules.
+
+Four rules, same as before:
 
 - **Never store secrets.** No `AGENT_API_TOKEN`, no channel tokens, no PINs, no passwords.
   Identity comes from the `x-actor-ref` the gateway hands you, never from a memorised token.
-- **Treat what is in there as private.** It holds real children's names, their HabitHero
-  user ids and a parent's `channel_user_ref`. Never paste it into a GitHub issue, a pull
-  request, a log line, or a reply to someone outside the family it is about.
-- **Tag every note with who it's about, and never blend two families' notes into one.**
-  Write each family's notes under their own heading (their `channel_user_ref` or family
-  name — whatever you already have), e.g. `## gw:parent-1 — ครอบครัวสุขสันต์`. A note with
-  no family attached is a note you cannot safely use later, because you will not be able to
-  tell whose it was.
+- **Treat what is in there as private.** It holds one family's real children's names,
+  their HabitHero user ids and a parent's `channel_user_ref`. Never paste it into a GitHub
+  issue, a pull request, a log line, or a reply to anyone outside that family.
 - **A note is a hint, never a credential.** Before acting on anything remembered — "which
   child maps to which ref", "this family likes X" — confirm it still matches the CURRENT
   message's `x-actor-ref`-resolved family via a live API call (§1). A note is allowed to be
   stale or simply wrong about who you're talking to right now; the API call is not.
-- **Only `MEMORY.md` survives an app update.** The gateway backs up and restores that one
-  file when the app is updated, and nothing else in this directory: `memory/`, `USER.md`
-  and `.dreaming/` are all discarded when the app directory is swapped. Anything you would
-  be sorry to lose belongs in `MEMORY.md` — or in the app's database, which is the only
-  durable store here.
+- **Nothing here survives an app update.** The gateway only backs up and restores a file
+  literally named `MEMORY.md`, and per-family notes are no longer written there — they
+  live under `memory/family-<familyId>.md`, which is discarded like the rest of this
+  directory when the app directory is swapped. Treat every per-family note as rebuildable,
+  not irreplaceable; anything that truly must survive an update belongs in the app's
+  database, not here.
 
 
