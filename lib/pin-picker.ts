@@ -10,6 +10,7 @@
 import path from 'node:path'
 import { prisma } from '@/lib/db'
 import { readPhoto } from '@/lib/api'
+import type { SessionUser } from '@/lib/auth'
 
 export interface ChildOption {
   id: string
@@ -30,6 +31,18 @@ export async function getFamilyPinSlug(familyId: string): Promise<string | null>
     select: { pinSlug: true },
   })
   return family?.pinSlug ?? null
+}
+
+/**
+ * The gate for app/pin/page.tsx's server-side auto-redirect: only a
+ * `role: 'parent'` session skips the code-entry form, and only to that
+ * session's OWN family. `user` must be the server-verified session (never a
+ * client-supplied familyId) — a `null` user or a `child` session (which gets
+ * the existing localStorage/code-entry flow instead) both resolve to `null`.
+ */
+export async function resolveParentPinRedirect(user: SessionUser | null): Promise<string | null> {
+  if (user?.role !== 'parent') return null
+  return getFamilyPinSlug(user.familyId)
 }
 
 /**

@@ -11,10 +11,11 @@
  * unresolved slug returns null rather than falling back to an unscoped list.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
-import { getFamilyPinSlug, loadFamilyChildrenBySlug } from '@/lib/pin-picker'
+import { getFamilyPinSlug, loadFamilyChildrenBySlug, resolveParentPinRedirect } from '@/lib/pin-picker'
 import { generatePinSlug } from '@/lib/pin-slug'
 import { resetAndSeed, getRefs, prisma } from './helpers/db'
 import { IDS } from '@/prisma/seed.test'
+import type { SessionUser } from '@/lib/auth'
 
 beforeEach(async () => {
   await resetAndSeed()
@@ -97,5 +98,40 @@ describe('getFamilyPinSlug', () => {
 
     expect(await getFamilyPinSlug(famB.id)).toBeNull()
     expect(await getFamilyPinSlug('this-family-id-does-not-exist')).toBeNull()
+  })
+})
+
+/** Build a minimal SessionUser as getSessionUser() would return it. */
+function sessionUser(overrides: Partial<SessionUser> & { familyId: string }): SessionUser {
+  return { userId: 'u1', role: 'parent', name: null, ...overrides }
+}
+
+describe('resolveParentPinRedirect', () => {
+  it("a signed-in parent gets their own family's pinSlug, with no code typed", async () => {
+    const { familyId } = await getRefs()
+    const slug = await resolveParentPinRedirect(sessionUser({ role: 'parent', familyId }))
+    expect(slug).toBe(IDS.familyPinSlug)
+  })
+
+  it('no session falls through to the existing client gate (null, no redirect)', async () => {
+    expect(await resolveParentPinRedirect(null)).toBeNull()
+  })
+
+  it("a child's own session also falls through — only a parent session auto-redirects", async () => {
+    const { familyId } = await getRefs()
+    const slug = await resolveParentPinRedirect(sessionUser({ role: 'child', familyId }))
+    expect(slug).toBeNull()
+  })
+
+  it("a parent from family A can never be redirected into family B's picker", async () => {
+    const { familyId: familyAId } = await getRefs()
+    const famB = await seedFamilyB()
+
+    const slugForA = await resolveParentPinRedirect(sessionUser({ role: 'parent', familyId: familyAId }))
+    const slugForB = await resolveParentPinRedirect(sessionUser({ role: 'parent', familyId: famB.id }))
+
+    expect(slugForA).toBe(IDS.familyPinSlug)
+    expect(slugForB).toBe(famB.slug)
+    expect(slugForA).not.toBe(slugForB)
   })
 })

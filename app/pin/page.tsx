@@ -25,16 +25,14 @@
  */
 import { redirect } from 'next/navigation'
 import { getSessionUser } from '@/lib/auth'
-import { getFamilyPinSlug } from '@/lib/pin-picker'
+import { resolveParentPinRedirect } from '@/lib/pin-picker'
 import PinEntryGateClient from './PinEntryGateClient'
 
 export const dynamic = 'force-dynamic'
 
 export default async function PinEntryGatePage() {
   const user = await getSessionUser()
-  if (user?.role === 'parent') {
-    const slug = await getFamilyPinSlug(user.familyId)
-    if (slug) redirect(`/pin/${slug}`)
-  }
+  const slug = await resolveParentPinRedirect(user)
+  if (slug) redirect(`/pin/${slug}`)
   return <PinEntryGateClient />
 }
