@@ -172,21 +172,20 @@ export async function exportFamilySnapshot(
   db: PrismaClient,
   familyId: string,
 ): Promise<FamilySnapshot> {
-  const [family, users] = await Promise.all([
+  // chores/rewards only depend on familyId (already in hand), not on the
+  // users lookup below — run them in the same batch instead of waiting.
+  const [family, users, chores, rewards] = await Promise.all([
     db.family.findUniqueOrThrow({ where: { id: familyId } }),
     db.user.findMany({ where: { familyId } }),
-  ])
-  const userIds = users.map((u) => u.id)
-
-  const [progress, chores, rewards] = await Promise.all([
-    db.userProgress.findMany({ where: { userId: { in: userIds } } }),
     db.chore.findMany({ where: { familyId } }),
     db.reward.findMany({ where: { familyId } }),
   ])
+  const userIds = users.map((u) => u.id)
   const choreIds = chores.map((c) => c.id)
   const rewardIds = rewards.map((r) => r.id)
 
-  const [completions, redemptions, adjustments, userBadges] = await Promise.all([
+  const [progress, completions, redemptions, adjustments, userBadges] = await Promise.all([
+    db.userProgress.findMany({ where: { userId: { in: userIds } } }),
     db.choreCompletion.findMany({ where: { choreId: { in: choreIds } } }),
     db.rewardRedemption.findMany({ where: { rewardId: { in: rewardIds } } }),
     db.pointAdjustment.findMany({ where: { userId: { in: userIds } } }),
@@ -545,8 +544,10 @@ export async function importFamily(
         }
       })
     } catch (err) {
-      if (isUniqueViolation(err) && attempt < 4) continue
-      throw err
+      if (!isUniqueViolation(err)) throw err
+      if (attempt < 4) continue
+      // Last attempt's pinSlug collision — fall through to the message below
+      // instead of rethrowing the raw Prisma error.
     }
   }
   throw new Error('Could not generate a unique pin slug after 5 attempts, please retry')

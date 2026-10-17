@@ -74,11 +74,14 @@ export const POST = withHandler(async (req) => {
       })
       return ok(result, { status: 201 })
     } catch (err) {
-      if (!pastFamilyCreation && isUniqueViolation(err) && attempt < 4) continue
-      if (pastFamilyCreation && isUniqueViolation(err)) {
-        throw conflict(`อีเมล ${normalizedEmail} ถูกใช้แล้ว`)
+      if (pastFamilyCreation) {
+        if (isUniqueViolation(err)) throw conflict(`อีเมล ${normalizedEmail} ถูกใช้แล้ว`)
+        throw err
       }
-      throw err
+      if (!isUniqueViolation(err)) throw err
+      if (attempt < 4) continue
+      // Last attempt's pinSlug collision — fall through to the message below
+      // instead of rethrowing the raw Prisma error.
     }
   }
   throw conflict('ไม่สามารถสร้างครอบครัวได้ กรุณาลองใหม่')

@@ -54,6 +54,7 @@ gh api repos/0xMaxMa/app-habit-hero/commits/main --jq .sha
 - [ใช้งานครั้งแรก](#ใช้งานครั้งแรก)
 - [ข้อมูลตั้งต้น (init data)](#ข้อมูลตั้งต้น-init-data)
 - [พัฒนาต่อบนเครื่อง](#พัฒนาต่อบนเครื่อง)
+- [นำเข้าข้อมูลครอบครัวจากเครื่องอื่น (import)](#นำเข้าข้อมูลครอบครัวจากเครื่องอื่น-import)
 - [เทสต์](#เทสต์)
 - [โครงสร้างโปรเจกต์](#โครงสร้างโปรเจกต์)
 - [ความปลอดภัย](#ความปลอดภัย)
@@ -236,6 +237,35 @@ npm run db:seed:dev
 | `npm run lint` | ESLint |
 | `npm run db:seed` | เติม catalog งานบ้าน+รางวัลเข้าครอบครัวที่มีอยู่ |
 | `npm run db:seed:dev` | ข้อมูลตัวอย่างสำหรับ dev |
+
+---
+
+## นำเข้าข้อมูลครอบครัวจากเครื่องอื่น (import)
+
+[`scripts/import-family.ts`](./scripts/import-family.ts) ย้ายข้อมูลครอบครัวหนึ่งครอบครัว
+(สมาชิก งานบ้าน รางวัล ประวัติส่งงาน เหรียญตรา ฯลฯ) จากฐานข้อมูล deployment เดิม
+เข้ามาในฐานข้อมูล multi-family ปัจจุบัน — ใช้ตอนย้าย deployment เดี่ยวแบบเก่าเข้ามาอยู่รวมกับครอบครัวอื่น
+รายละเอียดเต็ม (การ remap id, เงื่อนไข collision, สิ่งที่ไม่ย้าย) อยู่ใน
+[`lib/import-family.ts`](./lib/import-family.ts)
+
+```bash
+# 1. restore pg_dump ของ deployment เดิมใส่ Postgres เปล่าๆ (ไม่ใช่ฐานข้อมูลของแอปนี้)
+createdb habithero_import_source
+psql habithero_import_source < other-family-dump.sql
+
+# 2. dry run ก่อนเสมอ (ค่า default — แค่พิมพ์รายงาน ไม่เขียนอะไร)
+DATABASE_URL=<ฐานข้อมูลของแอปนี้> \
+SOURCE_DATABASE_URL=postgres://.../habithero_import_source \
+npx tsx scripts/import-family.ts
+
+# 3. พอรายงานถูกต้องแล้วค่อย apply จริง
+DATABASE_URL=<ฐานข้อมูลของแอปนี้> \
+SOURCE_DATABASE_URL=postgres://.../habithero_import_source \
+npx tsx scripts/import-family.ts --apply
+```
+
+สคริปต์ปฏิเสธการนำเข้าทันทีถ้าพบอีเมลหรือ channel binding ที่ซ้ำกับของเดิมในฐานข้อมูลปลายทาง
+ใส่ `--source-family-id <id>` เพิ่มได้ถ้าฝั่ง source มีมากกว่าหนึ่งครอบครัว
 
 ---
 
