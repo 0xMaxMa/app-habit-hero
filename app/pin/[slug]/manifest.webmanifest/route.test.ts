@@ -22,6 +22,15 @@ describe('GET /pin/[slug]/manifest.webmanifest', () => {
     expect(res.headers.get('content-type')).toBe('application/manifest+json')
   })
 
+  it("scopes to the whole app, not just /pin/, so navigating to the parent dashboard or the child area stays inside the standalone PWA", async () => {
+    const res = await GET(new Request('http://x/pin/p95v4c/manifest.webmanifest'), {
+      params: { slug: 'p95v4c' },
+    })
+    const body = await res.json()
+
+    expect(body.scope).toBe('/')
+  })
+
   it('is still a standalone, installable manifest', async () => {
     const res = await GET(new Request('http://x/pin/abc123/manifest.webmanifest'), {
       params: { slug: 'abc123' },

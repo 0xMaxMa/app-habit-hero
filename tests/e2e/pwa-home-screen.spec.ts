@@ -35,6 +35,26 @@ test('manifest start_url points at the slug-aware /pin gate, not the bare site r
   expect(manifest.start_url).toBe('/pin')
 })
 
+/**
+ * Regression test for the follow-up bug the per-family manifest introduced:
+ * iOS only keeps navigation inside the standalone PWA while it stays within
+ * the linked manifest's `scope`. An absent `scope` defaults to the directory
+ * of `start_url` — '/' for the site-wide manifest's '/pin', but only '/pin/'
+ * for the per-family manifest's '/pin/<slug>' — so tapping into the parent
+ * dashboard or the child area (both outside '/pin/') dropped the user into
+ * an in-app browser tab instead of staying standalone. Both manifests must
+ * declare `scope: '/'` explicitly.
+ */
+test('both the site-wide and per-family manifests scope to the whole app, not just /pin/', async ({
+  request,
+}) => {
+  const siteWide = await (await request.get('/manifest.webmanifest')).json()
+  expect(siteWide.scope).toBe('/')
+
+  const perFamily = await (await request.get(`/pin/${FAMILY_PIN_SLUG}/manifest.webmanifest`)).json()
+  expect(perFamily.scope).toBe('/')
+})
+
 test("a family's own /pin/<slug> page links its own manifest, start_url baked to that family", async ({
   page,
   request,

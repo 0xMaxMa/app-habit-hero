@@ -14,6 +14,16 @@ import type { MetadataRoute } from 'next'
  * app/pin/[slug]/manifest.webmanifest/route.ts) makes that `start_url` the
  * family's own `/pin/<slug>`, so the saved icon is the full URL — no
  * localStorage/redirect round-trip required.
+ *
+ * `scope` must stay explicit at '/'. Per the Web App Manifest spec, an absent
+ * `scope` defaults to the directory containing `start_url` — '/' for the
+ * site-wide manifest's '/pin', but only '/pin/' for the per-family manifest's
+ * '/pin/<slug>'. Under that implicit default, iOS treats any navigation
+ * outside '/pin/' (the parent dashboard, chores, rewards, the child area)
+ * as leaving the installed app's scope and drops back to an in-app browser
+ * tab instead of staying standalone — confirmed by the manifest responses
+ * having no `scope` key at all before this fix. Setting it to '/' here keeps
+ * both manifests covering the whole app regardless of `start_url`.
  */
 export function buildWebAppManifest(startUrl: string): MetadataRoute.Manifest {
   return {
@@ -22,6 +32,7 @@ export function buildWebAppManifest(startUrl: string): MetadataRoute.Manifest {
     description: 'A cozy habit and chore tracker for families',
     lang: 'th',
     start_url: startUrl,
+    scope: '/',
     display: 'standalone',
     background_color: '#FBF5E9',
     theme_color: '#FBF5E9',
