@@ -47,12 +47,33 @@
  * point at the catalog this deployment already seeded. `.name` is NOT used
  * for the match — it has no @unique constraint, so it cannot be trusted to
  * resolve to one row.
+ *
+ * OLDER-SCHEMA SOURCES: PointAdjustment shipped after this app's first
+ * release, so a dump restored from a deployment that predates it has every
+ * other table but not that one. `exportFamilySnapshot` treats Prisma's
+ * "table does not exist" error for that specific model as zero adjustments
+ * rather than failing the whole export — see `isMissingTable` below.
  */
 
-import type { PrismaClient, CompletionStatus, RedemptionStatus } from '@prisma/client'
+import { Prisma, type PrismaClient, type CompletionStatus, type RedemptionStatus } from '@prisma/client'
 import { createFamilyWithPinSlug } from './pin-slug'
 import { isUniqueViolation } from './api/tx'
 import type { UserWritableFields, ChoreWritableFields, RewardWritableFields } from './model-fields'
+
+/**
+ * True when `err` is Prisma's P2021 ("the table does not exist") for the
+ * given model — the source dump predates that model's migration (e.g. a
+ * deployment from before PointAdjustment shipped). Matched on the Prisma
+ * error code + meta.modelName, not a string search of the message, so it
+ * can't misfire on an unrelated missing table or a reworded message.
+ */
+function isMissingTable(err: unknown, modelName: string): boolean {
+  return (
+    err instanceof Prisma.PrismaClientKnownRequestError &&
+    err.code === 'P2021' &&
+    err.meta?.modelName === modelName
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Snapshot shape — what exportFamilySnapshot reads and importFamily writes.
@@ -184,11 +205,20 @@ export async function exportFamilySnapshot(
   const choreIds = chores.map((c) => c.id)
   const rewardIds = rewards.map((r) => r.id)
 
+  // Older-schema source (see header) — only the exact missing-table case
+  // falls back to zero adjustments; everything else still propagates.
+  const adjustmentsPromise = db.pointAdjustment
+    .findMany({ where: { userId: { in: userIds } } })
+    .catch((err) => {
+      if (isMissingTable(err, 'PointAdjustment')) return []
+      throw err
+    })
+
   const [progress, completions, redemptions, adjustments, userBadges] = await Promise.all([
     db.userProgress.findMany({ where: { userId: { in: userIds } } }),
     db.choreCompletion.findMany({ where: { choreId: { in: choreIds } } }),
     db.rewardRedemption.findMany({ where: { rewardId: { in: rewardIds } } }),
-    db.pointAdjustment.findMany({ where: { userId: { in: userIds } } }),
+    adjustmentsPromise,
     db.userBadge.findMany({ where: { userId: { in: userIds } } }),
   ])
 

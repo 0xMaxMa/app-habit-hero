@@ -19,8 +19,9 @@
  * scenario (an actual source lives on a different database and is never
  * touched by this tool).
  */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import bcrypt from 'bcryptjs'
+import { Prisma, type PrismaClient } from '@prisma/client'
 import {
   exportFamilySnapshot,
   resolveSourceFamilyId,
@@ -321,5 +322,63 @@ describe('importFamily — collision refusal', () => {
     const userCountBefore = await prisma.user.count()
     await expect(importFamily(prisma, snapshot)).rejects.toThrow()
     expect(await prisma.user.count()).toBe(userCountBefore)
+  })
+})
+
+/**
+ * A source connection wired to the real test Postgres for every table EXCEPT
+ * pointAdjustment, which rejects the way a genuine pre-PointAdjustment
+ * deployment's connection would (Prisma P2021 — confirmed against a real
+ * scratch Postgres with that table dropped, not guessed from docs). The
+ * seeded source family below still has a real PointAdjustment ROW underneath,
+ * so this proves the export reads zero adjustments because the simulated
+ * schema can't see the table at all, not because there happened to be
+ * nothing to find.
+ */
+function sourceWithoutPointAdjustmentsTable(real: PrismaClient): PrismaClient {
+  return {
+    family: real.family,
+    user: real.user,
+    chore: real.chore,
+    reward: real.reward,
+    userProgress: real.userProgress,
+    choreCompletion: real.choreCompletion,
+    rewardRedemption: real.rewardRedemption,
+    userBadge: real.userBadge,
+    pointAdjustment: {
+      findMany: vi.fn().mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError(
+          'Invalid `prisma.pointAdjustment.findMany()` invocation:\n\n' +
+            'The table `public.point_adjustments` does not exist in the current database.',
+          {
+            code: 'P2021',
+            clientVersion: 'test',
+            meta: { modelName: 'PointAdjustment', table: 'public.point_adjustments' },
+          },
+        ),
+      ),
+    },
+  } as unknown as PrismaClient
+}
+
+describe('importFamily — source schema predates PointAdjustment (table missing entirely)', () => {
+  it('exports and imports a family with zero PointAdjustment rows instead of failing, confirmed via a real dump\'s table inventory', async () => {
+    const src = await seedSourceFamily('old-schema') // seeds a REAL PointAdjustment row too
+    const sourceConn = sourceWithoutPointAdjustmentsTable(prisma)
+
+    const snapshot = await exportFamilySnapshot(sourceConn, src.familyId)
+    expect(snapshot.pointAdjustments).toEqual([])
+    expect(snapshot.users).toHaveLength(2) // every other table still read normally
+
+    await deleteSourceFamily(src)
+
+    const result = await importFamily(prisma, snapshot)
+
+    expect(result.counts.pointAdjustments).toBe(0)
+    expect(result.counts.users).toBe(2)
+    const newUsers = await prisma.user.findMany({ where: { familyId: result.familyId } })
+    expect(
+      await prisma.pointAdjustment.count({ where: { userId: { in: newUsers.map((u) => u.id) } } }),
+    ).toBe(0)
   })
 })
