@@ -2,21 +2,25 @@ import { test, expect } from '@playwright/test'
 
 /**
  * tests/e2e/pwa-home-screen.spec.ts — regression test for the iOS "Add to
- * Home Screen" bug: iOS launches a home-screen PWA icon at the manifest's
- * `start_url` (app/manifest.ts), not at the page the user tapped Share from.
+ * Home Screen" bug: iOS bakes whichever manifest is LINKED from the current
+ * page into the saved icon's `start_url`, discarding the page's own URL —
+ * confirmed on-device even when Add to Home Screen was tapped directly from
+ * `/pin/<slug>`, because that page was (before the fix below) still linking
+ * the site-wide manifest, whose `start_url` is the generic `/pin` gate.
  * Playwright can't literally drive iOS's native Add-to-Home-Screen sheet, so
- * this proves the two halves of the fix that make it work in practice:
+ * this proves the two things iOS actually reads:
  *
- *   1. the manifest really serves `start_url: '/pin'` (not '/', which has no
- *      slug-aware redirect and bounces an anonymous visitor to /login);
- *   2. landing on /pin — exactly what tapping that home-screen icon does —
- *      redirects straight to /pin/<slug> once this device has already
- *      bookmarked a family (RememberSlug.tsx writes that slug to
- *      localStorage on any /pin/<slug> visit; app/pin/page.tsx reads it
- *      back).
- *
- * Together: tap icon → launches /pin → localStorage redirect → /pin/<slug>,
- * with no re-typing the family code.
+ *   1. `/pin/<slug>` links ITS OWN manifest (not the site-wide one), and that
+ *      manifest's `start_url` is that exact family's `/pin/<slug>` — so Add
+ *      to Home Screen from a family's own page bakes the full URL into the
+ *      saved icon directly, no redirect involved;
+ *   2. the site-wide manifest (linked from every other page, e.g. the bare
+ *      `/pin` gate) still starts at `/pin`, not `/` (site root → `/login`
+ *      for an anonymous visitor, with no family context at all) — a
+ *      fallback for a bookmark saved with no specific family page open, and
+ *      for platforms (Android/Chrome) that don't isolate installed-PWA
+ *      storage from the browser, where RememberSlug's localStorage redirect
+ *      still works.
  */
 
 /** Matches prisma/seed.test.ts → IDS.familyPinSlug; update both together. */
@@ -29,6 +33,21 @@ test('manifest start_url points at the slug-aware /pin gate, not the bare site r
   expect(res.ok()).toBe(true)
   const manifest = await res.json()
   expect(manifest.start_url).toBe('/pin')
+})
+
+test("a family's own /pin/<slug> page links its own manifest, start_url baked to that family", async ({
+  page,
+  request,
+}) => {
+  await page.goto(`/pin/${FAMILY_PIN_SLUG}`)
+
+  const manifestHref = await page.locator('link[rel="manifest"]').getAttribute('href')
+  expect(manifestHref).toBe(`/pin/${FAMILY_PIN_SLUG}/manifest.webmanifest`)
+
+  const res = await request.get(manifestHref!)
+  expect(res.ok()).toBe(true)
+  const manifest = await res.json()
+  expect(manifest.start_url).toBe(`/pin/${FAMILY_PIN_SLUG}`)
 })
 
 test('a device that already bookmarked a family lands straight on it from bare /pin, like a home-screen tap would', async ({

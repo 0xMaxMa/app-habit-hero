@@ -19,13 +19,28 @@
  * Server component: loads this family's children (role=child) so a kid can
  * pick their avatar, then hands off to the client form for PIN entry.
  * force-dynamic so the DB query never runs at build time.
+ *
+ * generateMetadata below links THIS page's own manifest.webmanifest
+ * (start_url `/pin/<slug>`) instead of the site-wide one — see that route's
+ * doc comment for why: iOS Safari's Add to Home Screen bakes the linked
+ * manifest's start_url into the saved icon even when tapped from this exact
+ * page, so without this override the icon would still land on bare `/pin`.
  */
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { loadFamilyChildrenBySlug } from '@/lib/pin-picker'
 import PinEntryForm from './PinEntryForm'
 import { RememberSlug, ForgetSlug } from './RememberSlug'
 
 export const dynamic = 'force-dynamic'
+
+export async function generateMetadata({
+  params,
+}: {
+  params: { slug: string }
+}): Promise<Metadata> {
+  return { manifest: `/pin/${encodeURIComponent(params.slug)}/manifest.webmanifest` }
+}
 
 export default async function FamilyPinPage({ params }: { params: { slug: string } }) {
   const children = await loadFamilyChildrenBySlug(params.slug)
