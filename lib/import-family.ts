@@ -223,7 +223,11 @@ export async function exportFamilySnapshot(
   // chores/rewards only depend on familyId (already in hand), not on the
   // users lookup below — run them in the same batch instead of waiting.
   const [family, users, chores, rewards] = await Promise.all([
-    db.family.findUniqueOrThrow({ where: { id: familyId } }),
+    // select: only `name` is used below — an unselected query would also pull
+    // `pinSlug`, which a source dump from before the family-pin-slug
+    // migration (20261012090000) doesn't have, same category of
+    // older-schema gap as the PointAdjustment handling above.
+    db.family.findUniqueOrThrow({ where: { id: familyId }, select: { name: true } }),
     db.user.findMany({ where: { familyId } }),
     db.chore.findMany({ where: { familyId } }),
     db.reward.findMany({ where: { familyId } }),

@@ -86,6 +86,19 @@ describe('exportFamilySnapshot — source schema predates PointAdjustment', () =
   })
 })
 
+describe('exportFamilySnapshot — source schema predates the family pinSlug column', () => {
+  it('selects only `name` off family, never implicitly pulling pinSlug (missing on a source restored from before migration 20261012090000_family_pin_slug, confirmed against a real pre-multi-family dump)', async () => {
+    const db = sourceDbWith(() => Promise.resolve([]))
+
+    await exportFamilySnapshot(db as unknown as PrismaClient, 'fam_old')
+
+    expect(db.family.findUniqueOrThrow).toHaveBeenCalledWith({
+      where: { id: 'fam_old' },
+      select: { name: true },
+    })
+  })
+})
+
 /**
  * importFamily's retry loop — only a P2002 whose `meta.target` actually says
  * `pin_slug` may be retried. `checkImportCollisions` already proves email/
