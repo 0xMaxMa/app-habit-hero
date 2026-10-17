@@ -40,6 +40,7 @@ isolate memory mode (`app.yaml`'s `isolate_memory`, per-conversation isolation,
 it on — that used to be refused and no longer is — but its key is per `(channel, chatId)`,
 not per family, which would split one family's notes across each linked parent's own
 conversation. See AGENTS.md §10 for the full reasoning. Don't reach for
-`memory_search`/`memory_get` as a shortcut here either: this agent's archive is never
-built, so they would find nothing — the path above is the only way in or out of a family's
-notes.
+`memory_search`/`memory_get` as a shortcut here either: `app.yaml` sets
+`services.agent.disable_archive: true` (gateway issue #609 / PR #612), so this agent's
+archive is never built and those tools are never registered — the path above is the only
+way in or out of a family's notes.

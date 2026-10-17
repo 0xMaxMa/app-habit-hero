@@ -303,10 +303,15 @@ itself: an app that groups several chats into one account gets one memory per ch
 per-account key would be a separate feature. The per-family file is the right layer for
 this product regardless of what gateway's own key is scoped to.
 
-Nothing here currently calls `memory_search`/`memory_get`, and nothing needs to: gateway
-never builds this agent's searchable archive in the first place (`app-agent` workspaces
-are excluded from archive indexing independently of isolate memory mode), so there is no
-cross-family index for those tools to return even if invoked. The per-family file above
-remains the only isolation mechanism this agent has.
+Nothing here calls `memory_search`/`memory_get`, and nothing can: `app.yaml` now sets
+`services.agent.disable_archive: true` (gateway issue #609, fixed in gateway PR #612).
+Before that flag existed, the API-driven session path excluded `app-agent` workspaces from
+archive indexing, but the channel-message spawn path did not — a chore photo or chat
+message from any family would still build and index this agent's workspace, and nothing
+here chose it. `disable_archive` closes that gap at both spawn sites: no `kb.sqlite` is
+built or reindexed for this agent, the staleness GC is off, and `memory_search`/
+`memory_get` are never registered (`GATEWAY_DISABLE_ARCHIVE`). The per-family file above
+remains the only isolation mechanism this agent needs for its own notes; `disable_archive`
+is what keeps the gateway from building a cross-family index on top of it.
 
 
