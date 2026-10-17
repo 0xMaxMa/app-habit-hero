@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { Prisma, type PrismaClient } from '@prisma/client'
-import { exportFamilySnapshot } from './import-family'
+import { exportFamilySnapshot, importFamily, type FamilySnapshot } from './import-family'
 
 function missingTableError(modelName: string, table: string): Prisma.PrismaClientKnownRequestError {
   return new Prisma.PrismaClientKnownRequestError(
@@ -83,5 +83,85 @@ describe('exportFamilySnapshot — source schema predates PointAdjustment', () =
     await expect(exportFamilySnapshot(db as unknown as PrismaClient, 'fam_old')).rejects.toThrow(
       /user_badges/,
     )
+  })
+})
+
+/**
+ * importFamily's retry loop — only a P2002 whose `meta.target` actually says
+ * `pin_slug` may be retried. `checkImportCollisions` already proves email/
+ * channelUserRef are clash-free before the transaction opens, but that check
+ * and the transaction aren't atomic with each other, so a concurrent writer
+ * can still land a genuine collision on one of those fields here. Mocking
+ * `$transaction` directly (rather than exercising the real create calls
+ * inside it) isolates exactly the retry-vs-fail-fast decision in the catch
+ * block, independent of the rest of the write path.
+ */
+function p2002(target: string[]): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields', {
+    code: 'P2002',
+    clientVersion: 'test',
+    meta: { target },
+  })
+}
+
+function emptySnapshot(): FamilySnapshot {
+  return {
+    family: { name: 'ครอบครัว' },
+    users: [],
+    userProgress: [],
+    chores: [],
+    rewards: [],
+    choreCompletions: [],
+    rewardRedemptions: [],
+    pointAdjustments: [],
+    userBadges: [],
+  }
+}
+
+describe('importFamily — distinguishing a pinSlug retry from an unrelated P2002', () => {
+  it('fails fast on a non-pinSlug collision instead of retrying 5 times against it', async () => {
+    const transaction = vi.fn().mockRejectedValue(p2002(['email']))
+    const targetDb = { user: { findMany: vi.fn() }, $transaction: transaction }
+
+    await expect(
+      importFamily(targetDb as unknown as PrismaClient, emptySnapshot()),
+    ).rejects.toThrow(/email/i)
+
+    expect(transaction).toHaveBeenCalledTimes(1) // no useless retries against an unrelated error
+  })
+
+  it('reports the real colliding field, not a hardcoded "pinSlug" message', async () => {
+    const transaction = vi.fn().mockRejectedValue(p2002(['channel_user_ref']))
+    const targetDb = { user: { findMany: vi.fn() }, $transaction: transaction }
+
+    await expect(
+      importFamily(targetDb as unknown as PrismaClient, emptySnapshot()),
+    ).rejects.toThrow(/channel_user_ref/)
+  })
+
+  it('retries a genuine pinSlug collision and succeeds once a fresh slug clears it', async () => {
+    const success = { familyId: 'fam_new', pinSlug: 'freshslug1', counts: {} }
+    const transaction = vi
+      .fn()
+      .mockRejectedValueOnce(p2002(['pin_slug']))
+      .mockRejectedValueOnce(p2002(['pin_slug']))
+      .mockResolvedValueOnce(success)
+    const targetDb = { user: { findMany: vi.fn() }, $transaction: transaction }
+
+    const result = await importFamily(targetDb as unknown as PrismaClient, emptySnapshot())
+
+    expect(result).toBe(success)
+    expect(transaction).toHaveBeenCalledTimes(3)
+  })
+
+  it('exhausts retries and reports a pinSlug-specific message when every attempt collides on pinSlug', async () => {
+    const transaction = vi.fn().mockRejectedValue(p2002(['pin_slug']))
+    const targetDb = { user: { findMany: vi.fn() }, $transaction: transaction }
+
+    await expect(
+      importFamily(targetDb as unknown as PrismaClient, emptySnapshot()),
+    ).rejects.toThrow(/unique pin slug/i)
+
+    expect(transaction).toHaveBeenCalledTimes(5)
   })
 })

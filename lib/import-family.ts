@@ -75,6 +75,33 @@ function isMissingTable(err: unknown, modelName: string): boolean {
   )
 }
 
+/**
+ * Which column(s) a Prisma P2002 says collided, normalized to an array —
+ * Postgres/SQLite report `meta.target` as an array of column names, MySQL as
+ * a single string. Empty if `err` isn't a unique-violation or carries no
+ * target at all.
+ */
+function uniqueViolationTarget(err: unknown): string[] {
+  if (!isUniqueViolation(err)) return []
+  const target = (err as Prisma.PrismaClientKnownRequestError).meta?.target
+  if (Array.isArray(target)) return target.map(String)
+  if (typeof target === 'string') return [target]
+  return []
+}
+
+/**
+ * True only when a P2002's target is actually `pin_slug`/`pinSlug` — the ONE
+ * collision this retry loop is entitled to assume, since `checkImportCollisions`
+ * already proved email/channelUserRef are clash-free before the transaction
+ * opened. A collision reported on any other field means that proof raced
+ * something (e.g. a concurrent import/signup) and must NOT be retried as if
+ * it were a pinSlug clash — doing so would burn all 5 attempts against an
+ * unrelated error and then report a misleading "pin slug" message.
+ */
+function isPinSlugCollision(err: unknown): boolean {
+  return uniqueViolationTarget(err).some((field) => field === 'pin_slug' || field === 'pinSlug')
+}
+
 // ---------------------------------------------------------------------------
 // Snapshot shape — what exportFamilySnapshot reads and importFamily writes.
 // ---------------------------------------------------------------------------
@@ -387,10 +414,14 @@ export async function importFamily(
 
   // Wrapped in a retry loop, re-running the WHOLE transaction on a pinSlug
   // collision: `checkImportCollisions` above already proves every OTHER
-  // unique field (email, channelUserRef) is clash-free, so any P2002 raised
-  // inside this transaction can only be the pinSlug — and Postgres aborts the
-  // whole transaction on that first error, so a retry must open a fresh one
-  // (see createFamilyWithPinSlug, lib/pin-slug.ts) rather than reuse `tx`.
+  // unique field (email, channelUserRef) is clash-free at the time it ran, so
+  // the EXPECTED P2002 inside this transaction is the pinSlug — but that
+  // check and this transaction aren't atomic with each other, so a
+  // concurrent import/signup can still land a genuine email/channelUserRef
+  // collision here. `isPinSlugCollision` below tells the two apart via the
+  // error's `meta.target` instead of assuming. Postgres aborts the whole
+  // transaction on the first error, so a retry must open a fresh one (see
+  // createFamilyWithPinSlug, lib/pin-slug.ts) rather than reuse `tx`.
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       return await targetDb.$transaction(async (tx) => {
@@ -575,6 +606,16 @@ export async function importFamily(
       })
     } catch (err) {
       if (!isUniqueViolation(err)) throw err
+      if (!isPinSlugCollision(err)) {
+        const target = uniqueViolationTarget(err).join(', ') || 'an unrecognized field'
+        throw new Error(
+          `Import failed on an unexpected unique-constraint collision on ${target} inside the ` +
+            'write transaction. checkImportCollisions already ruled out email/channelUserRef ' +
+            'clashes before this transaction opened, so this means something else claimed that ' +
+            'value in the meantime (e.g. a concurrent import or signup) — retry the import rather ' +
+            'than assuming it was the pinSlug.',
+        )
+      }
       if (attempt < 4) continue
       // Last attempt's pinSlug collision — fall through to the message below
       // instead of rethrowing the raw Prisma error.
