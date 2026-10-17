@@ -12,20 +12,30 @@ import { describe, it, expect, vi } from 'vitest'
 import { createFamilyWithPinSlug, generatePinSlug } from './pin-slug'
 
 describe('generatePinSlug', () => {
-  it('produces a 10-character slug from the URL-safe alphabet', () => {
+  it('produces a 6-character slug from the URL-safe alphabet', () => {
     const slug = generatePinSlug()
-    expect(slug).toMatch(/^[abcdefghjkmnpqrstuvwxyz23456789]{10}$/)
+    expect(slug).toMatch(/^[abcdefghjkmnpqrstuvwxyz23456789]{6}$/)
+  })
+
+  it('draws from the full 32^6 space rather than a narrower one', () => {
+    // Sanity check against a silent regression (e.g. an off-by-one alphabet
+    // slice) that would shrink the space and quietly raise real collision
+    // odds. 500 draws from a true 32^6 space essentially never repeats
+    // (birthday-bound chance ≈ 500²/(2·32⁶) ≈ 1.2e-4); any repeat here means
+    // the space actually in use is far smaller than intended.
+    const slugs = new Set(Array.from({ length: 500 }, generatePinSlug))
+    expect(slugs.size).toBe(500)
   })
 })
 
 describe('createFamilyWithPinSlug', () => {
   it('creates the family with a freshly generated pinSlug', async () => {
-    const create = vi.fn().mockResolvedValue({ id: 'f1', name: 'ครอบครัว', pinSlug: 'whatever12' })
+    const create = vi.fn().mockResolvedValue({ id: 'f1', name: 'ครอบครัว', pinSlug: 'whatev' })
     const db = { family: { create } }
 
     const result = await createFamilyWithPinSlug(db as never, 'ครอบครัว')
 
-    expect(result).toEqual({ id: 'f1', name: 'ครอบครัว', pinSlug: 'whatever12' })
+    expect(result).toEqual({ id: 'f1', name: 'ครอบครัว', pinSlug: 'whatev' })
     expect(create).toHaveBeenCalledTimes(1)
     expect(create).toHaveBeenCalledWith({
       data: { name: 'ครอบครัว', pinSlug: expect.any(String) },

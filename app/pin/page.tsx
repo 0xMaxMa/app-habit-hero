@@ -84,7 +84,7 @@ export default function PinEntryGatePage() {
                 required
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
-                placeholder="เช่น abc123xy89"
+                placeholder="เช่น ab23cd"
                 className="w-full rounded-xl border-2 border-cream-600 bg-cream-50 px-3 py-2.5 font-semibold text-ink-900 outline-none transition focus:border-primary-500"
               />
             </div>
