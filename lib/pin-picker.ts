@@ -20,6 +20,19 @@ export interface ChildOption {
 }
 
 /**
+ * Return the `pinSlug` of the family with id `familyId`, or `null` when that
+ * family no longer exists. Callers must pass a server-verified id (e.g. the
+ * session's `familyId`), never a client-supplied one.
+ */
+export async function getFamilyPinSlug(familyId: string): Promise<string | null> {
+  const family = await prisma.family.findUnique({
+    where: { id: familyId },
+    select: { pinSlug: true },
+  })
+  return family?.pinSlug ?? null
+}
+
+/**
  * Resolve `slug` to its Family and return ONLY that family's children who
  * have a PIN set — or `null` when the slug itself does not resolve to any
  * family (an invalid/typo'd code). A transient failure (DB unreachable, pool

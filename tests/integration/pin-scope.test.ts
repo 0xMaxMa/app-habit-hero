@@ -11,7 +11,7 @@
  * unresolved slug returns null rather than falling back to an unscoped list.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
-import { loadFamilyChildrenBySlug } from '@/lib/pin-picker'
+import { getFamilyPinSlug, loadFamilyChildrenBySlug } from '@/lib/pin-picker'
 import { generatePinSlug } from '@/lib/pin-slug'
 import { resetAndSeed, getRefs, prisma } from './helpers/db'
 import { IDS } from '@/prisma/seed.test'
@@ -21,7 +21,7 @@ beforeEach(async () => {
 })
 
 /** A second, fully separate family with its own child who has a PIN set. */
-async function seedFamilyB(): Promise<{ slug: string; childName: string }> {
+async function seedFamilyB(): Promise<{ id: string; slug: string; childName: string }> {
   const slug = generatePinSlug()
   const family = await prisma.family.create({ data: { name: 'ครอบครัวบี', pinSlug: slug } })
   const childName = 'น้องบีสอง'
@@ -33,7 +33,7 @@ async function seedFamilyB(): Promise<{ slug: string; childName: string }> {
       pinHash: '$2a$10$abcdefghijklmnopqrstuv', // shape only — never verified here
     },
   })
-  return { slug, childName }
+  return { id: family.id, slug, childName }
 }
 
 describe('loadFamilyChildrenBySlug', () => {
@@ -72,5 +72,30 @@ describe('loadFamilyChildrenBySlug', () => {
     // without updating there, that suite silently stops testing the real URL.
     const family = await prisma.family.findUniqueOrThrow({ where: { id: IDS.family } })
     expect(family.pinSlug).toBe(IDS.familyPinSlug)
+  })
+})
+
+describe('getFamilyPinSlug', () => {
+  it("resolves a family's id to that family's own pinSlug", async () => {
+    const { familyId } = await getRefs()
+    expect(await getFamilyPinSlug(familyId)).toBe(IDS.familyPinSlug)
+  })
+
+  it("family A's id never returns family B's slug, and vice-versa", async () => {
+    const { familyId: familyAId } = await getRefs()
+    const famB = await seedFamilyB()
+
+    expect(await getFamilyPinSlug(familyAId)).toBe(IDS.familyPinSlug)
+    expect(await getFamilyPinSlug(famB.id)).toBe(famB.slug)
+    expect(famB.slug).not.toBe(IDS.familyPinSlug)
+  })
+
+  it('a deleted family resolves to null instead of throwing', async () => {
+    const famB = await seedFamilyB()
+    await prisma.user.deleteMany({ where: { familyId: famB.id } })
+    await prisma.family.delete({ where: { id: famB.id } })
+
+    expect(await getFamilyPinSlug(famB.id)).toBeNull()
+    expect(await getFamilyPinSlug('this-family-id-does-not-exist')).toBeNull()
   })
 })
