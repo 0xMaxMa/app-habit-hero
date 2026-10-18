@@ -26,6 +26,7 @@ import {
   conflict,
 } from '@/lib/api'
 import { isValidPinFormat } from '@/lib/onboarding'
+import type { UserWritableFields } from '@/lib/model-fields'
 
 export const dynamic = 'force-dynamic'
 
@@ -111,14 +112,14 @@ export const POST = withHandler(async (req) => {
     if (clash) throw conflict('อีเมลนี้ถูกใช้แล้ว')
 
     const passwordHash = await bcrypt.hash(body.password, 10)
+    const parentFields: Pick<UserWritableFields, 'name' | 'role' | 'email' | 'passwordHash'> = {
+      name: body.name,
+      role: 'parent',
+      email,
+      passwordHash,
+    }
     const parent = await prisma.user.create({
-      data: {
-        name: body.name,
-        role: 'parent',
-        familyId: actor.familyId,
-        email,
-        passwordHash,
-      },
+      data: { ...parentFields, familyId: actor.familyId },
       select: memberSelect,
     })
     await prisma.userProgress.create({ data: { userId: parent.id } })
@@ -128,13 +129,13 @@ export const POST = withHandler(async (req) => {
 
   // ---- Child (4-digit PIN) ----------------------------------------------
   const pinHash = await bcrypt.hash(body.pin, 10)
+  const childFields: Pick<UserWritableFields, 'name' | 'role' | 'pinHash'> = {
+    name: body.name,
+    role: 'child',
+    pinHash,
+  }
   const child = await prisma.user.create({
-    data: {
-      name: body.name,
-      role: 'child',
-      familyId: actor.familyId,
-      pinHash,
-    },
+    data: { ...childFields, familyId: actor.familyId },
     select: memberSelect,
   })
   await prisma.userProgress.create({ data: { userId: child.id } })

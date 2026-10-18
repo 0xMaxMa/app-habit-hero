@@ -15,8 +15,8 @@
  * migration still converges. Levels have no table at all (lib/level.ts).
  *
  * Run:
- *   npm run db:seed                 # the single family (errors if there are 2+)
- *   npm run db:seed -- <familyId>   # a specific family
+ *   npm run db:seed                 # only when exactly one family exists
+ *   npm run db:seed -- <familyId>   # a specific family (required once 2+ exist)
  */
 
 import { PrismaClient } from '@prisma/client'
@@ -26,8 +26,9 @@ import { STARTER_CHORES, STARTER_REWARDS } from '../lib/starter-catalog'
 const prisma = new PrismaClient()
 
 /**
- * Resolve which family to seed: the explicit CLI argument, else THE family
- * (HabitHero is single-family per install). Ambiguity is an error rather than a
+ * Resolve which family to seed: the explicit CLI argument, else THE family —
+ * only when exactly one exists. Multi-family (Phase A) means that is no
+ * longer guaranteed, so ambiguity is an error rather than a
  * guess — writing 40 rows into the wrong family is not something to shrug at.
  */
 async function resolveFamilyId(argv: string[]): Promise<string> {
@@ -44,7 +45,7 @@ async function resolveFamilyId(argv: string[]): Promise<string> {
   const families = await prisma.family.findMany({ select: { id: true, name: true } })
   if (families.length === 0) {
     throw new Error(
-      'ยังไม่มีครอบครัวในระบบ — เปิดแอปแล้วสร้างบัญชีผู้ปกครองที่ /setup ก่อน',
+      'ยังไม่มีครอบครัวในระบบ — เปิดแอปแล้วสร้างบัญชีผู้ปกครองที่ /signup ก่อน',
     )
   }
   if (families.length > 1) {

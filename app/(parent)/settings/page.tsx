@@ -36,6 +36,7 @@ type Member = {
 export default function SettingsPage() {
   const [members, setMembers] = React.useState<Member[] | null>(null)
   const [familyName, setFamilyName] = React.useState('')
+  const [pinSlug, setPinSlug] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
   const load = React.useCallback(async (opts?: { silent?: boolean }) => {
@@ -43,10 +44,11 @@ export default function SettingsPage() {
     if (!silent) setError(null)
     try {
       const [fam, mem] = await Promise.all([
-        api.get<{ family: { id: string; name: string } }>('/api/family'),
+        api.get<{ family: { id: string; name: string; pinSlug: string } }>('/api/family'),
         api.get<{ members: Member[] }>('/api/members'),
       ])
       setFamilyName(fam.family.name)
+      setPinSlug(fam.family.pinSlug)
       setMembers(mem.members)
       setError(null)
     } catch (err) {
@@ -96,6 +98,8 @@ export default function SettingsPage() {
         onSaved={setFamilyName}
         onError={setError}
       />
+
+      {pinSlug ? <PinLinkSection pinSlug={pinSlug} /> : null}
 
       <ChildrenSection
         loading={members === null}
@@ -161,6 +165,44 @@ function FamilySection({
         </div>
         <Button onClick={save} disabled={!dirty || busy}>
           {busy ? 'กำลังบันทึก…' : 'บันทึก'}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pin link — the bookmarkable /pin/<slug> URL for kids' sign-in             */
+/* -------------------------------------------------------------------------- */
+
+function PinLinkSection({ pinSlug }: { pinSlug: string }) {
+  const [copied, setCopied] = React.useState(false)
+  const url =
+    typeof window !== 'undefined' ? `${window.location.origin}/pin/${pinSlug}` : `/pin/${pinSlug}`
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard API unavailable — the link is still selectable text below.
+    }
+  }
+
+  return (
+    <Card padding="md" className="mb-6">
+      <h2 className="mb-1 text-base font-extrabold text-ink-900">ลิงก์เข้าเล่นสำหรับเด็ก</h2>
+      <p className="mb-3 text-xs font-semibold text-ink-500">
+        บันทึกลิงก์นี้เป็นบุ๊กมาร์กบนมือถือ/แท็บเล็ตที่บ้าน แล้วลูกจะกดเข้าหน้าเลือก PIN
+        ของครอบครัวเราได้ทันทีโดยไม่ต้องพิมพ์โค้ดอีก
+      </p>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <code className="flex-1 overflow-x-auto rounded-xl bg-cream-100 px-3 py-2 text-sm font-semibold text-ink-700">
+          {url}
+        </code>
+        <Button size="sm" onClick={copy}>
+          {copied ? 'คัดลอกแล้ว ✓' : 'คัดลอกลิงก์'}
         </Button>
       </div>
     </Card>

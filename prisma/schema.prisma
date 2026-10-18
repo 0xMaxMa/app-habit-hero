@@ -70,6 +70,13 @@ model Family {
   // channel-neutral group ref (was telegram_group_id) — set by the gateway.
   channelGroupRef String? @map("channel_group_ref")
 
+  // Stable, public, unguessable-enough slug for the family's own bookmarkable
+  // /pin/<slug> URL (multi-family: the child PIN picker must know WHICH
+  // family's children to list before it lists any). Generated once at family
+  // creation, never reused — unlike linkCode it is not one-time and is safe to
+  // keep in a browser bookmark on the family's home device indefinitely.
+  pinSlug String @unique @map("pin_slug")
+
   members User[]
   chores  Chore[]
   rewards Reward[]

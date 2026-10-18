@@ -28,6 +28,7 @@ import {
   isStarterChoreKey,
   isStarterRewardKey,
 } from '@/lib/starter-catalog'
+import type { UserWritableFields, ChoreWritableFields, RewardWritableFields } from '@/lib/model-fields'
 
 // The starter catalogue itself lives in lib/starter-catalog.ts (it is also read
 // by `npm run db:seed` for families that already exist). Re-exported here so the
@@ -241,17 +242,26 @@ export async function provisionOnboarding(
     starterRewardKeys,
   } = params
 
+  // The subset of UserWritableFields a freshly-provisioned member needs — no
+  // channelUserRef, since onboarding never links a channel identity.
+  type NewMemberFields = Pick<
+    UserWritableFields,
+    'name' | 'role' | 'avatarCharacter' | 'email' | 'pinHash' | 'passwordHash'
+  >
+
   // Pre-hash PINs and passwords outside the transaction.
-  const membersWithHash = await Promise.all(
-    members.map(async (m) => ({
-      name: m.name.trim(),
-      role: m.role,
-      avatarCharacter: m.avatar ?? null,
-      email: m.role === 'parent' && m.email ? m.email.trim().toLowerCase() : null,
-      pinHash: m.role === 'child' && m.pin ? await bcrypt.hash(m.pin, 10) : null,
-      passwordHash:
-        m.role === 'parent' && m.password ? await bcrypt.hash(m.password, 10) : null,
-    })),
+  const membersWithHash: NewMemberFields[] = await Promise.all(
+    members.map(
+      async (m): Promise<NewMemberFields> => ({
+        name: m.name.trim(),
+        role: m.role,
+        avatarCharacter: m.avatar ?? null,
+        email: m.role === 'parent' && m.email ? m.email.trim().toLowerCase() : null,
+        pinHash: m.role === 'child' && m.pin ? await bcrypt.hash(m.pin, 10) : null,
+        passwordHash:
+          m.role === 'parent' && m.password ? await bcrypt.hash(m.password, 10) : null,
+      }),
+    ),
   )
 
   // Resolve chosen starter content in catalogue order (stable, de-duplicated).
@@ -275,15 +285,7 @@ export async function provisionOnboarding(
     for (let index = 0; index < membersWithHash.length; index++) {
       const m = membersWithHash[index]
       const user = await tx.user.create({
-        data: {
-          name: m.name,
-          role: m.role,
-          familyId,
-          avatarCharacter: m.avatarCharacter,
-          email: m.email,
-          passwordHash: m.passwordHash,
-          pinHash: m.pinHash,
-        },
+        data: { ...m, familyId },
       })
       await tx.userProgress.create({ data: { userId: user.id } })
       createdMembers.push({ index, id: user.id, role: m.role })
@@ -292,38 +294,38 @@ export async function provisionOnboarding(
 
     const createdChoreIds: string[] = []
     for (const c of chosen) {
-      const chore = await tx.chore.create({
-        data: {
-          title: c.title,
-          description: c.description,
-          familyId,
-          xpValue: c.xpValue,
-          recurrence: c.recurrence,
-          category: c.category,
-          requirePhoto: c.requirePhoto,
-          isExtra: c.isExtra,
-          dueTime: c.dueTime ?? null,
-          recurDays: c.recurDays ?? [],
-          lateXpMultiplier: c.lateXpMultiplier ?? 1,
-        },
-      })
+      // Starter chores are never pre-assigned or date-windowed, so this is
+      // ChoreWritableFields minus assignedTo/activeFrom/activeUntil.
+      const choreFields: Omit<ChoreWritableFields, 'activeFrom' | 'activeUntil'> = {
+        title: c.title,
+        description: c.description,
+        xpValue: c.xpValue,
+        recurrence: c.recurrence,
+        category: c.category,
+        requirePhoto: c.requirePhoto,
+        isExtra: c.isExtra,
+        dueTime: c.dueTime ?? null,
+        recurDays: c.recurDays ?? [],
+        lateXpMultiplier: c.lateXpMultiplier ?? 1,
+      }
+      const chore = await tx.chore.create({ data: { ...choreFields, familyId } })
       createdChoreIds.push(chore.id)
     }
 
     const createdRewardIds: string[] = []
     for (const r of chosenRewards) {
-      const reward = await tx.reward.create({
-        data: {
-          title: r.title,
-          description: r.description ?? null,
-          familyId,
-          xpCost: r.xpCost,
-          iconEmoji: r.iconEmoji,
-          dailyLimit: r.dailyLimit ?? null,
-          weeklyLimit: r.weeklyLimit ?? null,
-          monthlyLimit: r.monthlyLimit ?? null,
-        },
-      })
+      // Starter rewards always start active, so this is RewardWritableFields
+      // minus isActive (left at the schema default).
+      const rewardFields: Omit<RewardWritableFields, 'isActive'> = {
+        title: r.title,
+        description: r.description ?? null,
+        xpCost: r.xpCost,
+        iconEmoji: r.iconEmoji,
+        dailyLimit: r.dailyLimit ?? null,
+        weeklyLimit: r.weeklyLimit ?? null,
+        monthlyLimit: r.monthlyLimit ?? null,
+      }
+      const reward = await tx.reward.create({ data: { ...rewardFields, familyId } })
       createdRewardIds.push(reward.id)
     }
 

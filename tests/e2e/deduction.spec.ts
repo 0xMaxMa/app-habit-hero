@@ -41,6 +41,8 @@ const PARENT = { email: 'parent@test.local', password: 'test1234' }
 const AGENT_TOKEN = 'test-agent-token' // == AGENT_API_TOKEN in .env.test
 const PARENT_REF = 'gw:parent-1'
 const CHILD_B = { id: 'usr_test_child_b', name: 'น้องบี', pin: '1234' }
+/** Matches prisma/seed.test.ts → IDS.familyPinSlug. */
+const FAMILY_PIN_SLUG = 'pin-test-fam'
 
 const AMOUNT = 50
 // Unique per run so re-running against a DB that was not re-seeded still finds
@@ -154,7 +156,7 @@ test.describe.serial('Parent point deduction', () => {
   test('W-DEDUCT-3: the CHILD sees the deduction and its reason in their own history', async ({
     page,
   }) => {
-    await page.goto('/pin')
+    await page.goto(`/pin/${FAMILY_PIN_SLUG}`)
     await page.getByRole('button', { name: CHILD_B.name }).click()
     for (const digit of CHILD_B.pin) {
       await page.getByRole('button', { name: digit, exact: true }).click()
@@ -241,7 +243,7 @@ test.describe.serial('Parent point deduction', () => {
   test('W-DEDUCT-6: the CHILD sees the cancelled deduction too, with no cancel control ever offered', async ({
     page,
   }) => {
-    await page.goto('/pin')
+    await page.goto(`/pin/${FAMILY_PIN_SLUG}`)
     await page.getByRole('button', { name: CHILD_B.name }).click()
     for (const digit of CHILD_B.pin) {
       await page.getByRole('button', { name: digit, exact: true }).click()

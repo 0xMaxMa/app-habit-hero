@@ -19,6 +19,7 @@ import { POST as approve } from '@/app/api/completions/[id]/approve/route'
 import { POST as reject } from '@/app/api/completions/[id]/reject/route'
 import { POST as unapprove } from '@/app/api/completions/[id]/unapprove/route'
 import { resetAndSeed, getRefs, prisma } from './helpers/db'
+import { generatePinSlug } from '@/lib/pin-slug'
 import { AGENT_TOKEN, agentHeaders, jsonBody } from './helpers/actor'
 import { IDS } from '@/prisma/seed.test'
 import { xpForSubmission, deadlineForDueTime } from '@/lib/point-rules'
@@ -282,7 +283,7 @@ describe('approve authz — role + cross-family', () => {
     })
 
     // ...and an unrelated family + parent that must not be able to touch it.
-    await prisma.family.create({ data: { id: 'fam_other', name: 'ครอบครัวอื่น' } })
+    await prisma.family.create({ data: { id: 'fam_other', name: 'ครอบครัวอื่น', pinSlug: generatePinSlug() } })
     await prisma.user.create({
       data: {
         id: 'usr_other_parent',

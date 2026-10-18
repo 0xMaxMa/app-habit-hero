@@ -38,7 +38,17 @@ export type Db = Prisma.TransactionClient
  */
 function isRetryable(err: unknown): boolean {
   if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false
-  return err.code === 'P2034' || err.code === 'P2002'
+  return err.code === 'P2034' || isUniqueViolation(err)
+}
+
+/**
+ * True when `err` is a Prisma unique-constraint violation (P2002). The one
+ * place every endpoint that mints a random unique value (pinSlug, linkCode)
+ * or de-dupes a write needs to check for this — previously copy-pasted at
+ * each call site.
+ */
+export function isUniqueViolation(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
 }
 
 /** Attempts before giving up. Contention here is between a handful of family
