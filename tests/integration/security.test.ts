@@ -20,6 +20,7 @@ import { GET as GET_PROGRESS } from '@/app/api/progress/route'
 import { POST as POST_BONUS } from '@/app/api/bonus/route'
 import { POST as APPROVE_COMPLETION } from '@/app/api/completions/[id]/approve/route'
 import { resetAndSeed, getRefs, prisma } from './helpers/db'
+import { generatePinSlug } from '@/lib/pin-slug'
 import { agentHeaders, AGENT_TOKEN } from './helpers/actor'
 
 beforeEach(async () => {
@@ -54,7 +55,7 @@ interface FamilyB {
  * and a pending completion — used to prove cross-family access is refused.
  */
 async function seedFamilyB(): Promise<FamilyB> {
-  const family = await prisma.family.create({ data: { name: 'ครอบครัวบี' } })
+  const family = await prisma.family.create({ data: { name: 'ครอบครัวบี', pinSlug: generatePinSlug() } })
   const parent = await prisma.user.create({
     data: {
       name: 'พ่อบี',

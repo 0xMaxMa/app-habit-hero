@@ -4,8 +4,8 @@
 สะสมเหรียญตรา แล้วเอา XP ไปแลกรางวัลที่พ่อแม่ตั้งไว้ ใช้ได้ทั้งหน้าเว็บและผ่านแชท (Telegram / Discord / LINE)
 ด้วย AI agent ของ [claude-gateway](https://github.com/0xMaxMa/claude-gateway)
 
-> ออกแบบเป็น **แอปครอบครัวเดียว (single-family)** ต่อการติดตั้งหนึ่งครั้ง — ไม่มีระบบสมัครสมาชิกเปิดสาธารณะ
-> ผู้ปกครองคนแรกที่กด "สร้างบัญชี" คือเจ้าของบ้าน แล้วประตูก็ปิด
+> รองรับ **หลายครอบครัว (multi-family)** ในดีพลอยเดียวกัน — เปิดสมัครสาธารณะที่ `/signup`
+> ใครก็สร้างครอบครัวใหม่ของตัวเองได้ ข้อมูลแต่ละครอบครัวแยกกันเด็ดขาด (family-scoped ทุก API)
 
 ---
 
@@ -54,6 +54,7 @@ gh api repos/0xMaxMa/app-habit-hero/commits/main --jq .sha
 - [ใช้งานครั้งแรก](#ใช้งานครั้งแรก)
 - [ข้อมูลตั้งต้น (init data)](#ข้อมูลตั้งต้น-init-data)
 - [พัฒนาต่อบนเครื่อง](#พัฒนาต่อบนเครื่อง)
+- [นำเข้าข้อมูลครอบครัวจากเครื่องอื่น (import)](#นำเข้าข้อมูลครอบครัวจากเครื่องอื่น-import)
 - [เทสต์](#เทสต์)
 - [โครงสร้างโปรเจกต์](#โครงสร้างโปรเจกต์)
 - [ความปลอดภัย](#ความปลอดภัย)
@@ -174,11 +175,11 @@ make -C tools/installs install
 
 ## ใช้งานครั้งแรก
 
-1. เปิดแอป → หน้า `/login` จะเสนอ **"สร้างบัญชี"** ให้เฉพาะตอนที่ยังไม่มีผู้ปกครองในระบบ
-2. กรอกอีเมล + รหัสผ่าน → สร้าง `Family` + ผู้ปกครองคนแรก (`POST /api/setup`)
-   — เรียกซ้ำครั้งที่สองจะได้ `409` เสมอ ป้องกันการสร้างครอบครัวที่สอง
+1. เปิดแอป → หน้า `/login` มีลิงก์ **"สร้างครอบครัวใหม่"** ไปที่ `/signup` เสมอ (เปิดสมัครสาธารณะ — สร้างได้ไม่จำกัดจำนวนครั้ง)
+2. กรอกอีเมล + รหัสผ่าน → สร้าง `Family` ใหม่ + ผู้ปกครองคนแรกของครอบครัวนั้น (`POST /api/signup`)
 3. เข้าสู่ **onboarding**: ตั้งชื่อครอบครัว → เพิ่มลูก (พร้อม PIN 4 หลักต่อคน) → เลือกงานเริ่มต้น → เสร็จ
 4. เชื่อมแชท: หน้า **ตั้งค่าครอบครัว** → สร้าง invite/link code แล้วให้สมาชิกส่งโค้ดนั้นให้ bot
+5. เด็กเข้าเล่นที่ `/pin/<โค้ดครอบครัว>` (โค้ดอยู่ในหน้าตั้งค่า คัดลอกไปบุ๊กมาร์กบนมือถือ/แท็บเล็ตที่บ้านได้เลย — เข้าครั้งแรกแล้วเครื่องนั้นจะจำไว้)
 
 ---
 
@@ -239,6 +240,35 @@ npm run db:seed:dev
 
 ---
 
+## นำเข้าข้อมูลครอบครัวจากเครื่องอื่น (import)
+
+[`scripts/import-family.ts`](./scripts/import-family.ts) ย้ายข้อมูลครอบครัวหนึ่งครอบครัว
+(สมาชิก งานบ้าน รางวัล ประวัติส่งงาน เหรียญตรา ฯลฯ) จากฐานข้อมูล deployment เดิม
+เข้ามาในฐานข้อมูล multi-family ปัจจุบัน — ใช้ตอนย้าย deployment เดี่ยวแบบเก่าเข้ามาอยู่รวมกับครอบครัวอื่น
+รายละเอียดเต็ม (การ remap id, เงื่อนไข collision, สิ่งที่ไม่ย้าย) อยู่ใน
+[`lib/import-family.ts`](./lib/import-family.ts)
+
+```bash
+# 1. restore pg_dump ของ deployment เดิมใส่ Postgres เปล่าๆ (ไม่ใช่ฐานข้อมูลของแอปนี้)
+createdb habithero_import_source
+psql habithero_import_source < other-family-dump.sql
+
+# 2. dry run ก่อนเสมอ (ค่า default — แค่พิมพ์รายงาน ไม่เขียนอะไร)
+DATABASE_URL=<ฐานข้อมูลของแอปนี้> \
+SOURCE_DATABASE_URL=postgres://.../habithero_import_source \
+npx tsx scripts/import-family.ts
+
+# 3. พอรายงานถูกต้องแล้วค่อย apply จริง
+DATABASE_URL=<ฐานข้อมูลของแอปนี้> \
+SOURCE_DATABASE_URL=postgres://.../habithero_import_source \
+npx tsx scripts/import-family.ts --apply
+```
+
+สคริปต์ปฏิเสธการนำเข้าทันทีถ้าพบอีเมลหรือ channel binding ที่ซ้ำกับของเดิมในฐานข้อมูลปลายทาง
+ใส่ `--source-family-id <id>` เพิ่มได้ถ้าฝั่ง source มีมากกว่าหนึ่งครอบครัว
+
+---
+
 ## เทสต์
 
 ```bash
@@ -266,7 +296,7 @@ app/
   (parent)/          หน้าเว็บฝั่งผู้ปกครอง — dashboard, approvals, chores, rewards, history, settings
   (child)/           หน้าเว็บฝั่งเด็ก — tasks, rewards, badges, history
   api/               REST API ที่ทั้งหน้าเว็บและ agent เรียกร่วมกัน
-  setup/ onboarding/ login/ pin/
+  signup/ onboarding/ login/ pin/[slug]/
 lib/
   api/               ตัวช่วยฝั่ง API — authz, validate, respond, gamification, photo
   badges.ts level.ts xp.ts streak.ts point-rules.ts clock.ts

@@ -52,6 +52,16 @@ enum CompletionStatus {
   rejected
 }
 
+// `self` — the child (or the agent on their behalf) submitted this the same
+// day. `parent_backdated` — a parent logged it after the fact for an earlier
+// day (POST /api/completions/backdate), kept distinguishable so a streak/XP
+// audit never mistakes a parent's retroactive entry for the child's own
+// same-day submission.
+enum CompletionSource {
+  self
+  parent_backdated
+}
+
 enum RedemptionStatus {
   pending
   approved
@@ -69,6 +79,13 @@ model Family {
 
   // channel-neutral group ref (was telegram_group_id) — set by the gateway.
   channelGroupRef String? @map("channel_group_ref")
+
+  // Stable, public, unguessable-enough slug for the family's own bookmarkable
+  // /pin/<slug> URL (multi-family: the child PIN picker must know WHICH
+  // family's children to list before it lists any). Generated once at family
+  // creation, never reused — unlike linkCode it is not one-time and is safe to
+  // keep in a browser bookmark on the family's home device indefinitely.
+  pinSlug String @unique @map("pin_slug")
 
   members User[]
   chores  Chore[]
@@ -192,6 +209,8 @@ model ChoreCompletion {
 
   isTeam      Boolean  @default(false) @map("is_team")
   teamMembers String[] @map("team_members")
+
+  source CompletionSource @default(self) @map("source")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

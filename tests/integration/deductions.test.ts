@@ -18,6 +18,7 @@ import { addXp } from '@/lib/xp'
 import { levelForXp } from '@/lib/level'
 import { MAX_DEDUCTION_XP } from '@/lib/point-rules'
 import { resetAndSeed, getRefs, prisma } from './helpers/db'
+import { generatePinSlug } from '@/lib/pin-slug'
 import { agentHeaders, AGENT_TOKEN } from './helpers/actor'
 
 beforeEach(async () => {
@@ -38,7 +39,7 @@ function deductAs(actorRef: string, body: unknown): Request {
 
 /** A second family with its own parent + child (150 XP), to prove cross-family refusal. */
 async function seedFamilyB() {
-  const family = await prisma.family.create({ data: { name: 'ครอบครัวบี' } })
+  const family = await prisma.family.create({ data: { name: 'ครอบครัวบี', pinSlug: generatePinSlug() } })
   const parent = await prisma.user.create({
     data: {
       name: 'พ่อบี',

@@ -2,11 +2,10 @@
 
 /**
  * app/login/LoginForm.tsx — parent sign-in form (design S1).
- * Email + password via the "parent" CredentialsProvider, with a link over to
- * the child PIN entry ("เข้าด้วยรหัสเด็ก / PIN 4 หลัก").
- *
- * A first-time visitor never reaches this form: app/login/page.tsx redirects to
- * /setup while no parent exists, so there is no "create an account" link here.
+ * Email + password via the "parent" CredentialsProvider, with links over to
+ * the child PIN entry ("เข้าด้วยรหัสเด็ก / PIN 4 หลัก") and to /signup for a
+ * visitor whose family doesn't have an account yet (open registration,
+ * Phase A — this form no longer assumes "the one family").
  *
  * Uses the shared "Cozy" design system (cream surfaces, blue primary, the
  * chunky <Button>) so the login buttons match the in-app buttons.
@@ -136,6 +135,13 @@ function LoginForm() {
           >
             เข้าด้วยรหัสเด็ก / PIN 4 หลัก
           </Button>
+          <button
+            type="button"
+            onClick={() => router.push('/signup')}
+            className="text-sm font-bold text-primary-600 hover:underline"
+          >
+            ยังไม่มีครอบครัวในระบบ? สร้างครอบครัวใหม่
+          </button>
         </div>
       </div>
     </main>

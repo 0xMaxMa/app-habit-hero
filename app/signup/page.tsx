@@ -1,18 +1,19 @@
 'use client'
 
 /**
- * app/setup/page.tsx — one-time bootstrap for the single family (design S1b).
+ * app/signup/page.tsx — public family sign-up (design S1b, Phase A).
  *
- * HabitHero has no open registration: this page creates THE parent + THE family
- * exactly once. It POSTs to /api/setup (which refuses once a parent exists),
- * then signs the new parent in and hands off to /onboarding to name the family,
- * add children and pick starter chores.
+ * Open registration: any visitor can create a brand-new Family + themselves as
+ * its first parent, as many times as they like (POST /api/signup). Replaces
+ * the old one-time /setup, which refused after the very first family ever
+ * created on a deployment — that gate (`needsSetup()`) is gone, so this page no
+ * longer guards itself against "already done"; there is no such state anymore.
  *
- * The page guards itself on mount: if setup is already done it bounces to
- * /login, so a stale link can never show an empty second-family form.
+ * After sign-up succeeds it signs the new parent in and hands off to
+ * /onboarding to name the family, add children and pick starter chores.
  */
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { signIn } from 'next-auth/react'
 import { Button } from '@/components/ui'
@@ -22,9 +23,8 @@ const inputCls =
   'w-full rounded-xl border-2 border-cream-600 bg-cream-50 px-3 py-2.5 ' +
   'font-semibold text-ink-900 outline-none transition focus:border-primary-500'
 
-export default function SetupPage() {
+export default function SignupPage() {
   const router = useRouter()
-  const [ready, setReady] = useState(false)
 
   const [parentName, setParentName] = useState('')
   const [familyName, setFamilyName] = useState('')
@@ -33,28 +33,12 @@ export default function SetupPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // Guard: setup is one-time. If a parent already exists, don't offer the form.
-  useEffect(() => {
-    let alive = true
-    api
-      .get<{ needsSetup: boolean }>('/api/setup')
-      .then((d) => {
-        if (!alive) return
-        if (!d.needsSetup) router.replace('/login')
-        else setReady(true)
-      })
-      .catch(() => alive && setReady(true))
-    return () => {
-      alive = false
-    }
-  }, [router])
-
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setLoading(true)
     setError('')
     try {
-      await api.post('/api/setup', {
+      await api.post('/api/signup', {
         email,
         password,
         parentName: parentName || undefined,
@@ -74,23 +58,19 @@ export default function SetupPage() {
     }
   }
 
-  if (!ready) {
-    return <main className="flex min-h-dvh items-center justify-center bg-cream-200" />
-  }
-
   return (
     <main className="flex min-h-dvh items-center justify-center bg-cream-200 px-4 py-12">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <div className="mb-2 text-4xl">🦸</div>
           <h1 className="text-2xl font-extrabold text-primary-700">HabitHero</h1>
-          <p className="mt-1 text-sm font-semibold text-ink-600">สร้างบัญชีผู้ปกครองครั้งแรก</p>
+          <p className="mt-1 text-sm font-semibold text-ink-600">สร้างครอบครัวใหม่</p>
         </div>
 
         <div className="rounded-3xl bg-cream-50 p-6 shadow-soft ring-1 ring-black/5">
           <h2 className="mb-1 text-lg font-extrabold text-ink-900">เริ่มต้นใช้งาน</h2>
           <p className="mb-4 text-xs font-semibold text-ink-500">
-            บัญชีนี้จะเป็นผู้ปกครองของครอบครัว — สร้างได้ครั้งเดียว
+            บัญชีนี้จะเป็นผู้ปกครองของครอบครัวใหม่ของคุณ
           </p>
 
           <form onSubmit={onSubmit} className="space-y-4">
@@ -140,7 +120,7 @@ export default function SetupPage() {
             ) : null}
 
             <Button type="submit" variant="primary" size="lg" fullWidth disabled={loading}>
-              {loading ? 'กำลังสร้างบัญชี…' : 'สร้างบัญชีและเริ่มต้น'}
+              {loading ? 'กำลังสร้างบัญชี…' : 'สร้างครอบครัวและเริ่มต้น'}
             </Button>
           </form>
         </div>

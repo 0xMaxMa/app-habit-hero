@@ -1,27 +1,16 @@
 /**
  * app/login/page.tsx — the gate in front of parent sign-in.
  *
- * On a fresh install there is no account to sign in with, so showing a login
- * form is a dead end: the visitor has to notice a small "create an account"
- * link and click it before anything works. Check first instead — while no
- * parent exists, send them straight to /setup, which is the only thing they
- * can actually do.
- *
- * The check is a DB read, so this stays dynamic; the form itself lives in
- * LoginForm.tsx as a client component.
- *
- * No redirect loop: /setup bounces back to /login once a parent exists, and
- * this page only redirects while one does not — the two conditions are exact
- * opposites and both read the same row.
+ * Multi-family (Phase A): sign-up is now open and repeatable (POST
+ * /api/signup, no more one-time needsSetup() gate), so there is no DB state
+ * that tells a visitor whether "they" already have an account — many
+ * different families can exist at once. /login always shows the sign-in
+ * form; a first-time visitor follows the explicit "สร้างครอบครัวใหม่" link in
+ * LoginForm to /signup instead of being redirected there automatically.
  */
 
-import { redirect } from 'next/navigation'
-import { needsSetup } from '@/lib/setup'
 import LoginForm from './LoginForm'
 
-export const dynamic = 'force-dynamic'
-
-export default async function LoginPage() {
-  if (await needsSetup()) redirect('/setup')
+export default function LoginPage() {
   return <LoginForm />
 }

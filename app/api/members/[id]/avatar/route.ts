@@ -5,10 +5,11 @@
  *          set User.avatarUrl.
  *   DELETE → remove the avatar (back to the illustrated fallback).
  *
- * Parent-only and family-scoped (T30); the target must be a member (child OR
- * parent — a parent may set their own or a co-parent's photo) in the acting
- * parent's own family, or 404. Photo I/O reuses lib/api/photo (decision #1:
- * local volume, not object storage).
+ * Parent-only and family-scoped; the target must be a member (child OR parent
+ * — a parent may set their own or a co-parent's photo) in the acting parent's
+ * own family, enforced with the shared `assertFamily` (lib/api/authz.ts, T30).
+ * Photo I/O reuses lib/api/photo (decision #1: local volume, not object
+ * storage).
  */
 
 import { prisma } from '@/lib/db'
@@ -17,20 +18,21 @@ import {
   ok,
   resolveActor,
   assertParent,
+  assertFamily,
   notFound,
   badRequest,
   saveAvatar,
   discardPhoto,
+  type Actor,
 } from '@/lib/api'
 
 export const dynamic = 'force-dynamic'
 
-/** Load a member that must live in the acting parent's family, or 404. */
-async function memberInFamily(id: string, familyId: string) {
+/** Load a member that must live in the acting parent's family. */
+async function memberInFamily(id: string, actor: Actor) {
   const user = await prisma.user.findUnique({ where: { id } })
-  if (!user || user.familyId !== familyId) {
-    throw notFound('ไม่พบสมาชิกในครอบครัวนี้')
-  }
+  if (!user) throw notFound('ไม่พบสมาชิก')
+  assertFamily(actor, user.familyId)
   return user
 }
 
@@ -76,7 +78,7 @@ export const POST = withHandler<{ params: { id: string } }>(async (req, { params
   const actor = await resolveActor(req)
   assertParent(actor)
 
-  const target = await memberInFamily(params.id, actor.familyId)
+  const target = await memberInFamily(params.id, actor)
 
   const form = await req.formData().catch(() => {
     throw badRequest('Expected multipart/form-data')
@@ -111,7 +113,7 @@ export const DELETE = withHandler<{ params: { id: string } }>(async (req, { para
   const actor = await resolveActor(req)
   assertParent(actor)
 
-  const target = await memberInFamily(params.id, actor.familyId)
+  const target = await memberInFamily(params.id, actor)
   const updated = await prisma.user.update({
     where: { id: target.id },
     data: { avatarUrl: null },

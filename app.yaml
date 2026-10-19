@@ -100,3 +100,16 @@ services:
   agent:
     path: ./agent
     name: habit-hero-bot
+    # Closes the cross-family memory leak gateway issue #609 found: the channel-message
+    # spawn path built this app-agent's searchable archive with no opt-out, unlike the
+    # API spawn path's `type !== 'app-agent'` exclusion. disable_archive turns the archive
+    # off at both spawn sites and drops memory_search/memory_get, regardless of agent type.
+    # See agent/AGENTS.md §10 / agent/skills/memory.md for why per-family files remain the
+    # isolation layer this agent actually relies on.
+    disable_archive: true
+    # The agent calls the app's own API with this token (gateway#618) — list it
+    # here so claude-gateway#619's compose generator carries it into the agent
+    # container's .env.agent; without it the agent gets no AGENT_API_TOKEN and
+    # can't authenticate its scoped API calls once the gateway upgrades to the
+    # #619 release that stops giving the agent the full app .env.
+    env: [AGENT_API_TOKEN]

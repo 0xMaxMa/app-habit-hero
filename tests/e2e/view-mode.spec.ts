@@ -18,12 +18,14 @@ import { test, expect, type Page } from '@playwright/test'
 const CHILD_A_NAME = 'น้องเอ'
 /** Matches prisma/seed.test.ts → CHILD_TEST_PIN. */
 const CHILD_A_PIN = '1234'
+/** Matches prisma/seed.test.ts → IDS.familyPinSlug. */
+const FAMILY_PIN_SLUG = 'pin-test-fam'
 
 const CATALOG_KEY = 'habithero:view-mode:child-rewards-catalog'
 const REQUESTS_KEY = 'habithero:view-mode:child-rewards-requests'
 
 async function loginAsChildA(page: Page): Promise<void> {
-  await page.goto('/pin')
+  await page.goto(`/pin/${FAMILY_PIN_SLUG}`)
   await page.getByRole('button', { name: CHILD_A_NAME }).click()
   for (const digit of CHILD_A_PIN) {
     await page.getByRole('button', { name: digit, exact: true }).click()

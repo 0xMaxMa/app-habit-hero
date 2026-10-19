@@ -16,10 +16,11 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { provisionOnboarding } from '@/lib/onboarding'
 import { STARTER_CHORES, STARTER_REWARDS } from '@/lib/starter-catalog'
 import { resetAndSeed, prisma } from './helpers/db'
+import { generatePinSlug } from '@/lib/pin-slug'
 
 /** A blank family + parent, as `POST /api/setup` would leave them. */
 async function freshFamily() {
-  const family = await prisma.family.create({ data: { name: 'ครอบครัวใหม่' } })
+  const family = await prisma.family.create({ data: { name: 'ครอบครัวใหม่', pinSlug: generatePinSlug() } })
   const parent = await prisma.user.create({
     data: { name: 'พ่อแม่', role: 'parent', familyId: family.id },
   })
