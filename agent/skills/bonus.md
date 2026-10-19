@@ -1,6 +1,11 @@
 # /bonus
 Parent grants manual bonus XP to a child.
 
+> Crediting a *specific chore* for a *specific past day within the last 7 days*? Use
+> `/backdate` (`skills/backdate.md`) instead — it logs the real completion and recomputes
+> the streak for that day, rather than just stapling XP onto today. Use `/bonus` for
+> anything outside that window, or when there's no specific chore being credited.
+
 **Usage:** `/bonus <child> <amount> <reason>`
 
 - `child` — the child's user id (resolve from name if needed).

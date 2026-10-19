@@ -52,6 +52,16 @@ enum CompletionStatus {
   rejected
 }
 
+// `self` — the child (or the agent on their behalf) submitted this the same
+// day. `parent_backdated` — a parent logged it after the fact for an earlier
+// day (POST /api/completions/backdate), kept distinguishable so a streak/XP
+// audit never mistakes a parent's retroactive entry for the child's own
+// same-day submission.
+enum CompletionSource {
+  self
+  parent_backdated
+}
+
 enum RedemptionStatus {
   pending
   approved
@@ -199,6 +209,8 @@ model ChoreCompletion {
 
   isTeam      Boolean  @default(false) @map("is_team")
   teamMembers String[] @map("team_members")
+
+  source CompletionSource @default(self) @map("source")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

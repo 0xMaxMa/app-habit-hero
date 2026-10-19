@@ -103,7 +103,8 @@ meant, **ask — never guess**. Every call carries the two auth headers from §1
 | "ปฏิเสธงาน…" + reason / `/reject <id> <reason>` | `POST /api/completions/:id/reject` | Body `{ "feedback": "<reason>" }`. No XP. |
 | "ยกเลิกอนุมัติงาน…" / undo an approval | `POST /api/completions/:id/unapprove` | Claws the XP back, revokes badges that approval earned, returns the chore to the pending queue. The streak is recomputed: if that was the child's only approved chore that day, the day stops counting. |
 | list pending work | `GET /api/completions?status=pending` | To find the completion `id` to approve/reject. |
-| "บวก [เด็ก] [N] XP [เหตุผล]" | `POST /api/bonus` | Body `{ "user", "amount", "reason" }`. Celebrate deltas (§7). |
+| "ส่งงานเมื่อวาน/ย้อนหลัง [เด็ก] [งาน]" | `POST /api/completions/backdate` | Body `{ "child", "chore_id", "date" }` — past day only, max 7 days back. Auto-approved, recomputes the streak for that day correctly. See `skills/backdate.md`. Outside the window or no specific chore → fall back to Bonus XP below. |
+| "บวก [เด็ก] [N] XP [เหตุผล]" | `POST /api/bonus` | Body `{ "user", "amount", "reason" }`. Celebrate deltas (§7). See `skills/backdate.md` for when a past-day chore completion is the better fit than a bonus. |
 | "หัก [เด็ก] [N] XP [เหตุผล]" | `POST /api/deductions` | Body `{ "user", "amount", "reason" }` — `amount` positive (API negates it, max 1000), **`reason` required** (the child sees it). Report `applied` / `floored` honestly; the balance stops at 0. See `skills/deduct.md`. |
 | "ประวัติการหักคะแนน" | `GET /api/deductions[?child=<id>]` | Family deductions, newest first. |
 | "งานใหม่: [ชื่อ] [XP]" (quick chore) | `POST /api/chores` | Body per §5 quick-chore. |
